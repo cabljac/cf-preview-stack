@@ -3,7 +3,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import Cloudflare from 'cloudflare';
 import { parseWorkersInput } from './config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, type DatabaseReplacement, type KVReplacement } from './wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, type DatabaseReplacement, type KVReplacement, type WorkflowReplacement } from './wrangler.js';
 import { createDatabase } from './d1.js';
 import { createKVNamespace } from './kv.js';
 import { teardownDatabases, teardownKVNamespaces } from './teardown.js';
@@ -104,6 +104,15 @@ export async function run(): Promise<void> {
       }
     }
 
+    // Build workflow name replacements (deduplicated by original name)
+    const workflowMap = new Map<string, WorkflowReplacement>();
+    for (const { config } of workerConfigs) {
+      for (const wf of config.workflows) {
+        if (workflowMap.has(wf.name)) continue;
+        workflowMap.set(wf.name, { previewName: `preview-pr-${prNumber}-${wf.name}` });
+      }
+    }
+
     // Step 3: Rewrite configs, run migrations (deduplicated), and upload each worker
     const migratedDbs = new Set<string>();
 
@@ -126,13 +135,25 @@ export async function run(): Promise<void> {
         }
       }
 
-      // Rewrite config (D1 first, then KV)
+      // Build workflow replacements map for this worker's bindings
+      const wfReplacements = new Map<string, WorkflowReplacement>();
+      for (const wf of config.workflows) {
+        const entry = workflowMap.get(wf.name);
+        if (entry) {
+          wfReplacements.set(wf.name, entry);
+        }
+      }
+
+      // Rewrite config (D1 first, then KV, then workflows)
       let rewritten = originalContent;
       if (dbReplacements.size > 0) {
         rewritten = rewriteWranglerConfig(rewritten, dbReplacements);
       }
       if (kvReplacements.size > 0) {
         rewritten = rewriteKVNamespaces(rewritten, kvReplacements);
+      }
+      if (wfReplacements.size > 0) {
+        rewritten = rewriteWorkflowNames(rewritten, wfReplacements);
       }
       if (rewritten !== originalContent) {
         writeFileSync(configPath, rewritten, 'utf-8');

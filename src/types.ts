@@ -28,6 +28,18 @@ export interface KVBinding {
   id: string;
 }
 
+/** A Workflow binding extracted from a wrangler config. */
+export interface WorkflowBinding {
+  /** The binding name used in the Worker (e.g. MY_WORKFLOW). */
+  binding: string;
+  /** The workflow name (globally unique per account). */
+  name: string;
+  /** The exported Workflow class name (present on producers). */
+  class_name?: string;
+  /** The script name of the Worker defining the Workflow (present on consumers). */
+  script_name?: string;
+}
+
 /** Parsed wrangler config with fields relevant to this action. */
 export interface WranglerConfig {
   /** The worker name from the config. */
@@ -36,6 +48,8 @@ export interface WranglerConfig {
   d1_databases: D1Binding[];
   /** KV namespace bindings defined in the config. */
   kv_namespaces: KVBinding[];
+  /** Workflow bindings defined in the config. */
+  workflows: WorkflowBinding[];
 }
 
 /** Result of uploading a preview version of a worker. */

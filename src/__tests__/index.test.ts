@@ -47,6 +47,7 @@ vi.mock('../wrangler.js', () => ({
   parseWranglerConfig: vi.fn(),
   rewriteWranglerConfig: vi.fn(),
   rewriteKVNamespaces: vi.fn(),
+  rewriteWorkflowNames: vi.fn(),
 }));
 
 vi.mock('../d1.js', () => ({
@@ -82,7 +83,7 @@ vi.mock('node:fs', () => ({
 }));
 
 import { parseWorkersInput } from '../config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames } from '../wrangler.js';
 import { createDatabase } from '../d1.js';
 import { createKVNamespace } from '../kv.js';
 import { teardownDatabases, teardownKVNamespaces } from '../teardown.js';
@@ -95,6 +96,7 @@ const mockParseWorkersInput = vi.mocked(parseWorkersInput);
 const mockParseWranglerConfig = vi.mocked(parseWranglerConfig);
 const mockRewriteWranglerConfig = vi.mocked(rewriteWranglerConfig);
 const mockRewriteKVNamespaces = vi.mocked(rewriteKVNamespaces);
+const mockRewriteWorkflowNames = vi.mocked(rewriteWorkflowNames);
 const mockCreateDatabase = vi.mocked(createDatabase);
 const mockCreateKVNamespace = vi.mocked(createKVNamespace);
 const mockTeardownDatabases = vi.mocked(teardownDatabases);
@@ -142,6 +144,7 @@ function setupStandardMocks() {
       { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
     ],
     kv_namespaces: [],
+    workflows: [],
   });
   mockTeardownDatabases.mockResolvedValue(['preview-pr-42-mydb']);
   mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -349,6 +352,7 @@ describe('index — orchestration', () => {
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-1', migrations_dir: './migrations' },
         ],
         kv_namespaces: [],
+        workflows: [],
       })
       .mockReturnValueOnce({
         name: 'web',
@@ -356,6 +360,7 @@ describe('index — orchestration', () => {
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-2', migrations_dir: './migrations' },
         ],
         kv_namespaces: [],
+        workflows: [],
       });
 
     mockTeardownDatabases.mockResolvedValue([]);
@@ -396,6 +401,7 @@ describe('index — orchestration', () => {
       name: 'api',
       d1_databases: [],
       kv_namespaces: [],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -487,7 +493,7 @@ describe('index — orchestration', () => {
     expect(mockInfo).toHaveBeenCalledWith('Ignoring unsupported action: labeled');
   });
 
-  test('does not rewrite config for worker with no D1 or KV bindings', async () => {
+  test('does not rewrite config for worker with no D1, KV, or workflow bindings', async () => {
     setupInputs();
     setEventAction('opened');
 
@@ -499,6 +505,7 @@ describe('index — orchestration', () => {
       name: 'api',
       d1_databases: [],
       kv_namespaces: [],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -515,6 +522,7 @@ describe('index — orchestration', () => {
     expect(mockWriteFileSync).not.toHaveBeenCalled();
     expect(mockRewriteWranglerConfig).not.toHaveBeenCalled();
     expect(mockRewriteKVNamespaces).not.toHaveBeenCalled();
+    expect(mockRewriteWorkflowNames).not.toHaveBeenCalled();
   });
 
   test('skips duplicate migrations for shared databases across workers', async () => {
@@ -535,6 +543,7 @@ describe('index — orchestration', () => {
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-1', migrations_dir: './migrations' },
         ],
         kv_namespaces: [],
+        workflows: [],
       })
       .mockReturnValueOnce({
         name: 'web',
@@ -542,6 +551,7 @@ describe('index — orchestration', () => {
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-2', migrations_dir: './migrations' },
         ],
         kv_namespaces: [],
+        workflows: [],
       });
 
     mockTeardownDatabases.mockResolvedValue([]);
@@ -586,6 +596,7 @@ describe('index — deploy_config (Vite plugin) support', () => {
       name: 'analytics',
       d1_databases: [],
       kv_namespaces: [],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -639,6 +650,7 @@ describe('index — deploy_config (Vite plugin) support', () => {
         { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
       ],
       kv_namespaces: [],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -680,6 +692,7 @@ describe('index — KV namespace orchestration', () => {
       kv_namespaces: [
         { binding: 'MY_KV', id: 'orig-kv-id' },
       ],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -741,6 +754,7 @@ describe('index — KV namespace orchestration', () => {
         kv_namespaces: [
           { binding: 'SHARED_KV', id: 'shared-kv-id' },
         ],
+        workflows: [],
       })
       .mockReturnValueOnce({
         name: 'web',
@@ -748,6 +762,7 @@ describe('index — KV namespace orchestration', () => {
         kv_namespaces: [
           { binding: 'SHARED_KV', id: 'shared-kv-id' },
         ],
+        workflows: [],
       });
 
     mockTeardownDatabases.mockResolvedValue([]);
@@ -782,6 +797,7 @@ describe('index — KV namespace orchestration', () => {
       kv_namespaces: [
         { binding: 'MY_KV', id: 'orig-kv-id' },
       ],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -816,6 +832,7 @@ describe('index — KV namespace orchestration', () => {
       kv_namespaces: [
         { binding: 'MY_KV', id: 'orig-kv-id' },
       ],
+      workflows: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
     mockTeardownKVNamespaces.mockResolvedValue([]);
@@ -847,5 +864,134 @@ describe('index — KV namespace orchestration', () => {
         }),
       ]),
     );
+  });
+});
+
+describe('index — workflow orchestration', () => {
+  test('rewrites workflow names in config', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+      kv_namespaces: [],
+      workflows: [
+        { binding: 'MY_WORKFLOW', name: 'my-workflow', class_name: 'MyWorkflow' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRewriteWorkflowNames.mockReturnValue('rewritten-wf');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteWorkflowNames).toHaveBeenCalled();
+    expect(mockWriteFileSync).toHaveBeenCalled();
+    expect(mockUploadPreviewVersion).toHaveBeenCalledTimes(1);
+  });
+
+  test('deduplicates workflow names across workers', async () => {
+    setupInputs({
+      workers: '- ./api/wrangler.jsonc\n- ./web/wrangler.jsonc',
+    });
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+      { path: './web/wrangler.jsonc', workingDirectory: './web' },
+    ]);
+    mockReadFileSync.mockReturnValueOnce('{"name":"api"}').mockReturnValueOnce('{"name":"web"}');
+    mockParseWranglerConfig
+      .mockReturnValueOnce({
+        name: 'api',
+        d1_databases: [],
+        kv_namespaces: [],
+        workflows: [
+          { binding: 'GENERATE_COURSE', name: 'generate-course-workflow', class_name: 'GenerateCourseWorkflow' },
+        ],
+      })
+      .mockReturnValueOnce({
+        name: 'web',
+        d1_databases: [],
+        kv_namespaces: [],
+        workflows: [
+          { binding: 'GENERATE_COURSE', name: 'generate-course-workflow', script_name: 'course-generation' },
+        ],
+      });
+
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRewriteWorkflowNames.mockReturnValue('rewritten');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion
+      .mockResolvedValueOnce({ workerName: 'api', previewUrl: 'pr-42-api.example.workers.dev' })
+      .mockResolvedValueOnce({ workerName: 'web', previewUrl: 'pr-42-web.example.workers.dev' });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Both workers should get workflow names rewritten
+    expect(mockRewriteWorkflowNames).toHaveBeenCalledTimes(2);
+    expect(mockUploadPreviewVersion).toHaveBeenCalledTimes(2);
+  });
+
+  test('worker with only workflows (no D1/KV) still rewrites and uploads', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+      kv_namespaces: [],
+      workflows: [
+        { binding: 'DELETE_ACCOUNT', name: 'delete-account-workflow', class_name: 'DeleteAccountWorkflow' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRewriteWorkflowNames.mockReturnValue('rewritten-wf');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockCreateDatabase).not.toHaveBeenCalled();
+    expect(mockCreateKVNamespace).not.toHaveBeenCalled();
+    expect(mockRewriteWorkflowNames).toHaveBeenCalledTimes(1);
+    expect(mockWriteFileSync).toHaveBeenCalled();
+    expect(mockUploadPreviewVersion).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not call rewriteWorkflowNames when no workflows present', async () => {
+    setupInputs();
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteWorkflowNames).not.toHaveBeenCalled();
   });
 });
