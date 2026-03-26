@@ -34,5 +34,5 @@ outputs:
   preview_alias:
     description: 'The alias used for preview versions, e.g. pr-42.'
 runs:
-  using: 'node20'
+  using: 'node22'
   main: 'dist/index.js'
