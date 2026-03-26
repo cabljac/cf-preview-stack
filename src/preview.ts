@@ -38,16 +38,18 @@ export async function runMigrations(
   bindings: D1Binding[],
   workingDirectory: string,
   cfEnv: CloudflareEnv,
+  configPath?: string,
 ): Promise<number> {
   const env = makeEnv(cfEnv);
   let count = 0;
+  const configFlag = configPath ? ` -c ${configPath}` : '';
 
   for (const binding of bindings) {
     if (!binding.migrations_dir) {
       continue;
     }
 
-    const cmd = `npx wrangler d1 migrations apply ${binding.database_name} --remote`;
+    const cmd = `npx wrangler d1 migrations apply ${binding.database_name} --remote${configFlag}`;
     core.info(`Running migrations: ${cmd} (cwd: ${workingDirectory})`);
 
     await execAsync(cmd, { cwd: workingDirectory, env });
@@ -75,9 +77,11 @@ export async function uploadPreviewVersion(
   workingDirectory: string,
   prNumber: number,
   cfEnv: CloudflareEnv,
+  configPath?: string,
 ): Promise<PreviewResult> {
   const alias = `pr-${prNumber}`;
-  const cmd = `npx wrangler versions upload --preview-alias ${alias}`;
+  const configFlag = configPath ? ` -c ${configPath}` : '';
+  const cmd = `npx wrangler versions upload --preview-alias ${alias}${configFlag}`;
   core.info(`Uploading preview version: ${cmd} (cwd: ${workingDirectory})`);
 
   const env = makeEnv(cfEnv);

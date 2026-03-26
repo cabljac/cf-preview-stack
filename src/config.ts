@@ -28,11 +28,15 @@ export function parseWorkersInput(input: string): WorkerConfig[] {
     }
 
     if (typeof entry === 'object' && entry !== null && 'path' in entry) {
-      const obj = entry as { path: string; working_directory?: string };
-      return {
+      const obj = entry as { path: string; working_directory?: string; deploy_config?: string };
+      const config: WorkerConfig = {
         path: obj.path,
         workingDirectory: obj.working_directory ?? (path.dirname(obj.path) || '.'),
       };
+      if (obj.deploy_config) {
+        config.deployConfig = obj.deploy_config;
+      }
+      return config;
     }
 
     throw new Error(`Invalid workers entry: ${JSON.stringify(entry)}`);

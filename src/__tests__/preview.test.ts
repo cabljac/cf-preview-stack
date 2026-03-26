@@ -40,6 +40,21 @@ describe('runMigrations', () => {
     expect(count).toBe(2);
   });
 
+  test('passes -c flag with configPath when provided', async () => {
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+      cb(null, { stdout: 'OK', stderr: '' });
+    });
+
+    const bindings: D1Binding[] = [
+      { binding: 'DB', database_name: 'preview-pr-42-mydb', database_id: 'uuid-1', migrations_dir: './migrations' },
+    ];
+
+    await runMigrations(bindings, '/work/api', ENV_VARS, '/work/api/dist/wrangler.json');
+
+    const cmd = mockExec.mock.calls[0][0] as string;
+    expect(cmd).toContain('-c /work/api/dist/wrangler.json');
+  });
+
   test('skips migrations for bindings without migrations_dir', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
       cb(null, { stdout: 'OK', stderr: '' });
@@ -101,6 +116,17 @@ describe('uploadPreviewVersion', () => {
 
     const opts = mockExec.mock.calls[0][1] as Record<string, string>;
     expect(opts.cwd).toBe('/work/api');
+  });
+
+  test('passes -c flag with configPath when provided', async () => {
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
+      cb(null, 'https://pr-42-api.example.workers.dev', '');
+    });
+
+    await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS, '/work/api/dist/out/wrangler.json');
+
+    const cmd = mockExec.mock.calls[0][0] as string;
+    expect(cmd).toContain('-c /work/api/dist/out/wrangler.json');
   });
 
   test('parses preview URL from wrangler stdout', async () => {
