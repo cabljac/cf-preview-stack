@@ -38377,7 +38377,10 @@ async function uploadPreviewVersion(workerName, workingDirectory, prNumber, cfEn
     core.info(`Uploading preview version: ${cmd} (cwd: ${workingDirectory})`);
     const env = makeEnv(cfEnv);
     const { stdout } = await execAsync(cmd, { cwd: workingDirectory, env });
-    const previewUrl = parsePreviewUrl(stdout) ?? `${alias}-${workerName}.workers.dev`;
+    core.info(`wrangler output: ${stdout}`);
+    const parsedUrl = parsePreviewUrl(stdout);
+    const previewUrl = parsedUrl ?? `${alias}-${workerName}.workers.dev`;
+    core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback — wrangler did not return a URL)'}`);
     return {
         workerName,
         previewUrl,
