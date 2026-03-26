@@ -61,11 +61,18 @@ export async function runMigrations(
 
 /**
  * Parse a preview URL from wrangler's stdout output.
- * Looks for URLs matching the *.workers.dev pattern.
+ * Prefers the "Version Preview Alias URL" line (stable alias like pr-42-worker.subdomain.workers.dev),
+ * falls back to "Version Preview URL" (version-id-based), then any *.workers.dev match.
  */
 function parsePreviewUrl(stdout: string): string | null {
-  const match = stdout.match(/(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-  return match ? match[2] : null;
+  const aliasMatch = stdout.match(/Version Preview Alias URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
+  if (aliasMatch) return aliasMatch[2];
+
+  const versionMatch = stdout.match(/Version Preview URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
+  if (versionMatch) return versionMatch[2];
+
+  const genericMatch = stdout.match(/(https?:\/\/)?([\w.-]+\.workers\.dev)/);
+  return genericMatch ? genericMatch[2] : null;
 }
 
 /**

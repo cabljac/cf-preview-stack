@@ -105,7 +105,7 @@ describe('runMigrations', () => {
 describe('uploadPreviewVersion', () => {
   test('runs wrangler versions upload --preview-alias pr-{N} with correct cwd', async () => {
     mockExec.mockImplementation((cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Version uploaded\nPreview alias: pr-42-api.example.workers.dev', '');
+      cb(null, 'Version uploaded\nVersion Preview Alias URL: https://pr-42-api.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
@@ -120,7 +120,7 @@ describe('uploadPreviewVersion', () => {
 
   test('passes -c flag with configPath when provided', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'https://pr-42-api.example.workers.dev', '');
+      cb(null, 'Version Preview Alias URL: https://pr-42-api.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS, '/work/api/dist/out/wrangler.json');
@@ -129,20 +129,61 @@ describe('uploadPreviewVersion', () => {
     expect(cmd).toContain('-c /work/api/dist/out/wrangler.json');
   });
 
-  test('parses preview URL from wrangler stdout', async () => {
+  test('prefers Version Preview Alias URL over Version Preview URL', async () => {
+    const stdout = [
+      'Worker Version ID: abc-123',
+      'Version Preview URL: https://abc123-api.example.workers.dev',
+      'Version Preview Alias URL: https://pr-42-api.example.workers.dev',
+    ].join('\n');
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Worker Version ID: abc-123\nPreview: https://pr-42-api.example.workers.dev', '');
+      cb(null, stdout, '');
     });
 
     const result = await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
 
-    expect(result.workerName).toBe('api');
-    expect(result.previewUrl).toContain('pr-42-api.example.workers.dev');
+    expect(result.previewUrl).toBe('pr-42-api.example.workers.dev');
+  });
+
+  test('falls back to Version Preview URL when no alias URL', async () => {
+    const stdout = [
+      'Worker Version ID: abc-123',
+      'Version Preview URL: https://abc123-api.example.workers.dev',
+    ].join('\n');
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
+      cb(null, stdout, '');
+    });
+
+    const result = await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
+
+    expect(result.previewUrl).toBe('abc123-api.example.workers.dev');
+  });
+
+  test('parses alias URL from realistic wrangler output with bindings', async () => {
+    const stdout = [
+      '⛅️ wrangler 4.70.0',
+      '─────────────────────────────────────────────',
+      'Total Upload: 7426.37 KiB / gzip: 1215.35 KiB',
+      'Your Worker has access to the following bindings:',
+      'env.DB (preview-pr-42-mydb)                                              D1 Database',
+      '',
+      'Uploaded memcard (6.35 sec)',
+      'Worker Version ID: 6d2ca7a8-1d95-4b48-bc84-1250a253af48',
+      'Version Preview URL: https://6d2ca7a8-memcard.jacobcable94.workers.dev',
+      'Version Preview Alias URL: https://pr-42-memcard.jacobcable94.workers.dev',
+    ].join('\n');
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
+      cb(null, stdout, '');
+    });
+
+    const result = await uploadPreviewVersion('memcard', '/work/web', 42, ENV_VARS);
+
+    expect(result.workerName).toBe('memcard');
+    expect(result.previewUrl).toBe('pr-42-memcard.jacobcable94.workers.dev');
   });
 
   test('passes CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as env vars', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Preview: https://pr-1-web.example.workers.dev', '');
+      cb(null, 'Version Preview Alias URL: https://pr-1-web.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('web', '/work/web', 1, ENV_VARS);
@@ -162,16 +203,16 @@ describe('uploadPreviewVersion', () => {
     await expect(uploadPreviewVersion('api', '/work/api', 42, ENV_VARS)).rejects.toThrow();
   });
 
-  test('returns PreviewResult with worker name and URL', async () => {
+  test('returns fallback URL when wrangler prints no URL', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'https://pr-5-myworker.subdomain.workers.dev', '');
+      cb(null, 'Uploaded myworker (1.5 sec)\nWorker Version ID: abc-123', '');
     });
 
     const result = await uploadPreviewVersion('myworker', '/work', 5, ENV_VARS);
 
     expect(result).toEqual({
       workerName: 'myworker',
-      previewUrl: 'pr-5-myworker.subdomain.workers.dev',
+      previewUrl: 'pr-5-myworker.workers.dev',
     });
   });
 });
