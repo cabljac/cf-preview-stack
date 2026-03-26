@@ -4,20 +4,20 @@
 
 Everything else depends on this. Sets up the repo, tooling, shared types, and test infrastructure.
 
-- [ ] Initialize `package.json` with pnpm, configure dependencies:
+- [x] Initialize `package.json` with pnpm, configure dependencies:
   - `@actions/core`, `@actions/github`, `cloudflare`, `jsonc-parser`, `yaml`
   - Dev: `vitest`, `typescript`, `@vercel/ncc`, `@types/node`
-- [ ] Create `tsconfig.json`
-- [ ] Create `action.yml` with all inputs/outputs defined
-- [ ] Create `src/types.ts` — all shared interfaces:
+- [x] Create `tsconfig.json`
+- [x] Create `action.yml` with all inputs/outputs defined
+- [x] Create `src/types.ts` — all shared interfaces:
   - `WorkerConfig` (path, workingDirectory)
   - `D1Binding` (binding name, database_name, database_id, migrations_dir)
   - `WranglerConfig` (worker name, d1_databases)
   - `PreviewResult` (worker name, preview URL)
   - `DatabaseResult` (original name, preview name, preview ID, migrations applied)
   - `ActionInputs` (all parsed action inputs)
-- [ ] Set up vitest config
-- [ ] Verify the skeleton builds and tests run (even if no tests yet)
+- [x] Set up vitest config
+- [x] Verify the skeleton builds and tests run (even if no tests yet)
 
 ---
 
