@@ -8,6 +8,7 @@ const mockSetOutput = vi.fn();
 const mockSetFailed = vi.fn();
 const mockInfo = vi.fn();
 const mockWarning = vi.fn();
+const mockSetSecret = vi.fn();
 
 vi.mock('@actions/core', () => ({
   getInput: (...args: unknown[]) => mockGetInput(...args),
@@ -16,6 +17,7 @@ vi.mock('@actions/core', () => ({
   setFailed: (...args: unknown[]) => mockSetFailed(...args),
   info: (...args: unknown[]) => mockInfo(...args),
   warning: (...args: unknown[]) => mockWarning(...args),
+  setSecret: (...args: unknown[]) => mockSetSecret(...args),
 }));
 
 // Mock @actions/github
@@ -48,6 +50,7 @@ vi.mock('../wrangler.js', () => ({
   rewriteWranglerConfig: vi.fn(),
   rewriteKVNamespaces: vi.fn(),
   rewriteWorkflowNames: vi.fn(),
+  rewriteVars: vi.fn(),
 }));
 
 vi.mock('../d1.js', () => ({
@@ -83,7 +86,7 @@ vi.mock('node:fs', () => ({
 }));
 
 import { parseWorkersInput } from '../config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars } from '../wrangler.js';
 import { createDatabase } from '../d1.js';
 import { createKVNamespace } from '../kv.js';
 import { teardownDatabases, teardownKVNamespaces } from '../teardown.js';
@@ -97,6 +100,7 @@ const mockParseWranglerConfig = vi.mocked(parseWranglerConfig);
 const mockRewriteWranglerConfig = vi.mocked(rewriteWranglerConfig);
 const mockRewriteKVNamespaces = vi.mocked(rewriteKVNamespaces);
 const mockRewriteWorkflowNames = vi.mocked(rewriteWorkflowNames);
+const mockRewriteVars = vi.mocked(rewriteVars);
 const mockCreateDatabase = vi.mocked(createDatabase);
 const mockCreateKVNamespace = vi.mocked(createKVNamespace);
 const mockTeardownDatabases = vi.mocked(teardownDatabases);
@@ -118,6 +122,7 @@ function setupInputs(overrides: Record<string, string | boolean> = {}) {
     comment: true,
     wrangler_version: 'latest',
     cleanup: false,
+    secrets: '{}',
     ...overrides,
   };
 
@@ -993,5 +998,108 @@ describe('index — workflow orchestration', () => {
     await run();
 
     expect(mockRewriteWorkflowNames).not.toHaveBeenCalled();
+  });
+});
+
+describe('index — secrets (vars) injection', () => {
+  test('parses secrets input and calls rewriteVars', async () => {
+    setupInputs({ secrets: '{"AUTH_SECRET":"test123","API_KEY":"key456"}' });
+    setupStandardMocks();
+    mockRewriteVars.mockReturnValue('rewritten-with-vars');
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteVars).toHaveBeenCalledWith(
+      expect.any(String),
+      { AUTH_SECRET: 'test123', API_KEY: 'key456' },
+    );
+  });
+
+  test('skips rewriteVars when secrets is empty {}', async () => {
+    setupInputs({ secrets: '{}' });
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteVars).not.toHaveBeenCalled();
+  });
+
+  test('applies secrets to all workers', async () => {
+    setupInputs({
+      workers: '- ./api/wrangler.jsonc\n- ./web/wrangler.jsonc',
+      secrets: '{"AUTH_SECRET":"shared-secret"}',
+    });
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+      { path: './web/wrangler.jsonc', workingDirectory: './web' },
+    ]);
+    mockReadFileSync.mockReturnValueOnce('{"name":"api"}').mockReturnValueOnce('{"name":"web"}');
+    mockParseWranglerConfig
+      .mockReturnValueOnce({ name: 'api', d1_databases: [], kv_namespaces: [], workflows: [] })
+      .mockReturnValueOnce({ name: 'web', d1_databases: [], kv_namespaces: [], workflows: [] });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRewriteVars.mockReturnValue('rewritten-with-vars');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion
+      .mockResolvedValueOnce({ workerName: 'api', previewUrl: 'pr-42-api.example.workers.dev' })
+      .mockResolvedValueOnce({ workerName: 'web', previewUrl: 'pr-42-web.example.workers.dev' });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteVars).toHaveBeenCalledTimes(2);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  test('writes config when only secrets change (no D1/KV/workflow bindings)', async () => {
+    setupInputs({ secrets: '{"AUTH_SECRET":"preview-secret"}' });
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+      kv_namespaces: [],
+      workflows: [],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRewriteVars.mockReturnValue('{"name":"api","vars":{"AUTH_SECRET":"preview-secret"}}');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRewriteVars).toHaveBeenCalledTimes(1);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+  });
+
+  test('masks secret values via core.setSecret', async () => {
+    setupInputs({ secrets: '{"AUTH_SECRET":"s3cret","API_KEY":"k3y"}' });
+    setupStandardMocks();
+    mockRewriteVars.mockReturnValue('rewritten');
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockSetSecret).toHaveBeenCalledWith('s3cret');
+    expect(mockSetSecret).toHaveBeenCalledWith('k3y');
   });
 });

@@ -151,3 +151,21 @@ export function rewriteWorkflowNames(
 
   return result;
 }
+
+/**
+ * Rewrite a wrangler.jsonc config string, adding or overwriting entries
+ * in the top-level `vars` object. Each key-value pair becomes an
+ * environment variable available to the Worker at runtime.
+ * Preserves comments, formatting, and whitespace.
+ */
+export function rewriteVars(
+  content: string,
+  vars: Record<string, string>,
+): string {
+  let result = content;
+  for (const [key, value] of Object.entries(vars)) {
+    const edits = modify(result, ['vars', key], value, MODIFICATION_OPTIONS);
+    result = applyEdits(result, edits);
+  }
+  return result;
+}
