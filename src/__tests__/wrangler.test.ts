@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'vitest';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames } from '../wrangler.js';
 
 const BASIC_CONFIG = `{
   // Worker name
@@ -60,6 +60,71 @@ const COMBINED_CONFIG = `{
     {
       "binding": "MY_KV",
       "id": "ns-id-5678"
+    }
+  ]
+}`;
+
+const WORKFLOW_PRODUCER_CONFIG = `{
+  // Worker with workflow producer
+  "name": "account-lifecycle",
+  "workflows": [
+    {
+      "binding": "DELETE_ACCOUNT",
+      "name": "delete-account-workflow",
+      "class_name": "DeleteAccountWorkflow"
+    }
+  ]
+}`;
+
+const WORKFLOW_CONSUMER_CONFIG = `{
+  "name": "web",
+  "workflows": [
+    {
+      "binding": "GENERATE_COURSE",
+      "name": "generate-course-workflow",
+      "script_name": "course-generation"
+    }
+  ]
+}`;
+
+const MULTI_WORKFLOW_CONFIG = `{
+  "name": "multi-workflow",
+  "workflows": [
+    {
+      "binding": "DELETE_ACCOUNT",
+      "name": "delete-account-workflow",
+      "class_name": "DeleteAccountWorkflow"
+    },
+    {
+      "binding": "GENERATE_COURSE",
+      "name": "generate-course-workflow",
+      "script_name": "course-generation"
+    }
+  ]
+}`;
+
+const COMBINED_ALL_CONFIG = `{
+  // Worker with everything
+  "name": "full-stack",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mydb",
+      "database_id": "db-uuid-1234",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "MY_KV",
+      "id": "ns-id-5678"
+    }
+  ],
+  "workflows": [
+    {
+      "binding": "MY_WORKFLOW",
+      "name": "my-workflow",
+      "class_name": "MyWorkflow"
     }
   ]
 }`;
@@ -239,5 +304,122 @@ describe('rewriteKVNamespaces', () => {
     expect(result).toContain('preview-pr-42-mydb');
     expect(result).toContain('new-ns-id');
     expect(result).toContain('// Worker with D1 and KV');
+  });
+});
+
+describe('parseWranglerConfig — workflows', () => {
+  test('extracts workflow producer bindings (binding, name, class_name)', () => {
+    const result = parseWranglerConfig(WORKFLOW_PRODUCER_CONFIG);
+    expect(result.workflows).toEqual([
+      {
+        binding: 'DELETE_ACCOUNT',
+        name: 'delete-account-workflow',
+        class_name: 'DeleteAccountWorkflow',
+      },
+    ]);
+  });
+
+  test('extracts workflow consumer bindings (binding, name, script_name)', () => {
+    const result = parseWranglerConfig(WORKFLOW_CONSUMER_CONFIG);
+    expect(result.workflows).toEqual([
+      {
+        binding: 'GENERATE_COURSE',
+        name: 'generate-course-workflow',
+        script_name: 'course-generation',
+      },
+    ]);
+  });
+
+  test('handles config with no workflows — empty array', () => {
+    const result = parseWranglerConfig(BASIC_CONFIG);
+    expect(result.workflows).toEqual([]);
+  });
+
+  test('handles multiple workflow bindings', () => {
+    const result = parseWranglerConfig(MULTI_WORKFLOW_CONFIG);
+    expect(result.workflows).toHaveLength(2);
+    expect(result.workflows[0].binding).toBe('DELETE_ACCOUNT');
+    expect(result.workflows[0].class_name).toBe('DeleteAccountWorkflow');
+    expect(result.workflows[1].binding).toBe('GENERATE_COURSE');
+    expect(result.workflows[1].script_name).toBe('course-generation');
+  });
+
+  test('parses combined D1 + KV + workflows config', () => {
+    const result = parseWranglerConfig(COMBINED_ALL_CONFIG);
+    expect(result.d1_databases).toHaveLength(1);
+    expect(result.kv_namespaces).toHaveLength(1);
+    expect(result.workflows).toHaveLength(1);
+    expect(result.workflows[0].name).toBe('my-workflow');
+  });
+});
+
+describe('rewriteWorkflowNames', () => {
+  test('rewrites name field for producer workflow', () => {
+    const replacements = new Map([
+      ['delete-account-workflow', { previewName: 'preview-pr-42-delete-account-workflow' }],
+    ]);
+    const result = rewriteWorkflowNames(WORKFLOW_PRODUCER_CONFIG, replacements);
+    expect(result).toContain('preview-pr-42-delete-account-workflow');
+    expect(result).not.toContain('"delete-account-workflow"');
+  });
+
+  test('rewrites name field for consumer workflow', () => {
+    const replacements = new Map([
+      ['generate-course-workflow', { previewName: 'preview-pr-7-generate-course-workflow' }],
+    ]);
+    const result = rewriteWorkflowNames(WORKFLOW_CONSUMER_CONFIG, replacements);
+    expect(result).toContain('preview-pr-7-generate-course-workflow');
+    expect(result).not.toContain('"generate-course-workflow"');
+  });
+
+  test('preserves comments and formatting', () => {
+    const replacements = new Map([
+      ['delete-account-workflow', { previewName: 'preview-pr-42-delete-account-workflow' }],
+    ]);
+    const result = rewriteWorkflowNames(WORKFLOW_PRODUCER_CONFIG, replacements);
+    expect(result).toContain('// Worker with workflow producer');
+    expect(result).toContain('  "name": "account-lifecycle"');
+  });
+
+  test('rewrites multiple workflow bindings', () => {
+    const replacements = new Map([
+      ['delete-account-workflow', { previewName: 'preview-pr-10-delete-account-workflow' }],
+      ['generate-course-workflow', { previewName: 'preview-pr-10-generate-course-workflow' }],
+    ]);
+    const result = rewriteWorkflowNames(MULTI_WORKFLOW_CONFIG, replacements);
+    expect(result).toContain('preview-pr-10-delete-account-workflow');
+    expect(result).toContain('preview-pr-10-generate-course-workflow');
+    expect(result).not.toContain('"delete-account-workflow"');
+    expect(result).not.toContain('"generate-course-workflow"');
+  });
+
+  test('skips workflows not in replacement map', () => {
+    const replacements = new Map([
+      ['delete-account-workflow', { previewName: 'preview-pr-10-delete-account-workflow' }],
+    ]);
+    const result = rewriteWorkflowNames(MULTI_WORKFLOW_CONFIG, replacements);
+    expect(result).toContain('preview-pr-10-delete-account-workflow');
+    // Second workflow should be unchanged
+    expect(result).toContain('"generate-course-workflow"');
+  });
+
+  test('combined D1 + KV + workflows config rewrites all correctly', () => {
+    const dbReplacements = new Map([
+      ['mydb', { previewName: 'preview-pr-42-mydb', previewId: 'new-db-uuid' }],
+    ]);
+    const kvReplacements = new Map([
+      ['ns-id-5678', { previewId: 'new-ns-id' }],
+    ]);
+    const wfReplacements = new Map([
+      ['my-workflow', { previewName: 'preview-pr-42-my-workflow' }],
+    ]);
+    let result = rewriteWranglerConfig(COMBINED_ALL_CONFIG, dbReplacements);
+    result = rewriteKVNamespaces(result, kvReplacements);
+    result = rewriteWorkflowNames(result, wfReplacements);
+    expect(result).toContain('new-db-uuid');
+    expect(result).toContain('preview-pr-42-mydb');
+    expect(result).toContain('new-ns-id');
+    expect(result).toContain('preview-pr-42-my-workflow');
+    expect(result).toContain('// Worker with everything');
   });
 });

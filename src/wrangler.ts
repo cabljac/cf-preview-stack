@@ -1,5 +1,5 @@
 import { parse, modify, applyEdits, type ModificationOptions } from 'jsonc-parser';
-import type { WranglerConfig, D1Binding, KVBinding } from './types.js';
+import type { WranglerConfig, D1Binding, KVBinding, WorkflowBinding } from './types.js';
 
 const MODIFICATION_OPTIONS: ModificationOptions = {
   formattingOptions: { tabSize: 2, insertSpaces: true },
@@ -32,10 +32,23 @@ export function parseWranglerConfig(content: string): WranglerConfig {
     }),
   );
 
+  const workflows: WorkflowBinding[] = (root.workflows ?? []).map(
+    (wf: Record<string, string | undefined>) => {
+      const binding: WorkflowBinding = {
+        binding: wf.binding!,
+        name: wf.name!,
+      };
+      if (wf.class_name) binding.class_name = wf.class_name;
+      if (wf.script_name) binding.script_name = wf.script_name;
+      return binding;
+    },
+  );
+
   return {
     name: root.name,
     d1_databases: d1Databases,
     kv_namespaces: kvNamespaces,
+    workflows,
   };
 }
 
@@ -102,6 +115,37 @@ export function rewriteKVNamespaces(
     if (!replacement) continue;
 
     const edits = modify(result, ['kv_namespaces', i, 'id'], replacement.previewId, MODIFICATION_OPTIONS);
+    result = applyEdits(result, edits);
+  }
+
+  return result;
+}
+
+/** Replacement info for a single workflow. */
+export interface WorkflowReplacement {
+  previewName: string;
+}
+
+/**
+ * Rewrite a wrangler.jsonc config string, replacing the `name` field
+ * for each workflow binding whose original name is in the replacements map.
+ * Preserves comments, formatting, and whitespace.
+ */
+export function rewriteWorkflowNames(
+  content: string,
+  replacements: Map<string, WorkflowReplacement>,
+): string {
+  const root = parse(content);
+  const workflows: Array<Record<string, string>> = root.workflows ?? [];
+
+  let result = content;
+
+  for (let i = workflows.length - 1; i >= 0; i--) {
+    const wf = workflows[i];
+    const replacement = replacements.get(wf.name);
+    if (!replacement) continue;
+
+    const edits = modify(result, ['workflows', i, 'name'], replacement.previewName, MODIFICATION_OPTIONS);
     result = applyEdits(result, edits);
   }
 
