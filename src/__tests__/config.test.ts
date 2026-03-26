@@ -51,6 +51,37 @@ describe('parseWorkersInput', () => {
     ]);
   });
 
+  test('parses deploy_config field for Vite plugin pattern', () => {
+    const input = `
+- path: apps/analytics/wrangler.jsonc
+  deploy_config: apps/analytics/dist/memcard_analytics/wrangler.json
+  working_directory: apps/analytics
+`;
+    const result = parseWorkersInput(input);
+    expect(result).toEqual([
+      {
+        path: 'apps/analytics/wrangler.jsonc',
+        workingDirectory: 'apps/analytics',
+        deployConfig: 'apps/analytics/dist/memcard_analytics/wrangler.json',
+      },
+    ]);
+  });
+
+  test('deploy_config defaults to undefined when not provided', () => {
+    const input = `
+- path: ./api/wrangler.jsonc
+  working_directory: ./api
+`;
+    const result = parseWorkersInput(input);
+    expect(result[0].deployConfig).toBeUndefined();
+  });
+
+  test('simple string entries have no deployConfig', () => {
+    const input = `- ./api/wrangler.jsonc`;
+    const result = parseWorkersInput(input);
+    expect(result[0].deployConfig).toBeUndefined();
+  });
+
   test('throws on empty input', () => {
     expect(() => parseWorkersInput('')).toThrow();
     expect(() => parseWorkersInput('  ')).toThrow();

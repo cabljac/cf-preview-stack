@@ -205,6 +205,7 @@ describe('index — orchestration', () => {
       './api',
       42,
       expect.objectContaining({ apiToken: 'test-cf-token', accountId: 'test-account-id' }),
+      undefined,
     );
 
     // 6. Comment
@@ -414,6 +415,7 @@ describe('index — orchestration', () => {
       [],
       './api',
       expect.anything(),
+      undefined,
     );
 
     // Still uploads the preview version
@@ -563,6 +565,101 @@ describe('index — orchestration', () => {
     // Second worker should get empty bindings (already migrated)
     const secondMigrationBindings = mockRunMigrations.mock.calls[1][0];
     expect(secondMigrationBindings).toHaveLength(0);
+  });
+});
+
+describe('index — deploy_config (Vite plugin) support', () => {
+  test('reads and rewrites deploy_config instead of source config when set', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      {
+        path: 'apps/analytics/wrangler.jsonc',
+        workingDirectory: 'apps/analytics',
+        deployConfig: 'apps/analytics/dist/out/wrangler.json',
+      },
+    ]);
+    // Should read from deploy_config path
+    mockReadFileSync.mockReturnValue('{"name":"analytics","d1_databases":[],"kv_namespaces":[]}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'analytics',
+      d1_databases: [],
+      kv_namespaces: [],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'analytics',
+      previewUrl: 'pr-42-analytics.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should read from deploy_config, not source path
+    expect(mockReadFileSync).toHaveBeenCalledWith(
+      'apps/analytics/dist/out/wrangler.json',
+      'utf-8',
+    );
+
+    // Should pass deploy_config to upload and migrations
+    expect(mockUploadPreviewVersion).toHaveBeenCalledWith(
+      'analytics',
+      'apps/analytics',
+      42,
+      expect.anything(),
+      'apps/analytics/dist/out/wrangler.json',
+    );
+    expect(mockRunMigrations).toHaveBeenCalledWith(
+      expect.anything(),
+      'apps/analytics',
+      expect.anything(),
+      'apps/analytics/dist/out/wrangler.json',
+    );
+  });
+
+  test('rewrites deploy_config file on disk when bindings need updating', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      {
+        path: 'apps/analytics/wrangler.jsonc',
+        workingDirectory: 'apps/analytics',
+        deployConfig: 'apps/analytics/dist/out/wrangler.json',
+      },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"analytics"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'analytics',
+      d1_databases: [
+        { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
+      ],
+      kv_namespaces: [],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockCreateDatabase.mockResolvedValue('new-uuid');
+    mockRewriteWranglerConfig.mockReturnValue('{"name":"analytics","rewritten":true}');
+    mockRunMigrations.mockResolvedValue(1);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'analytics',
+      previewUrl: 'pr-42-analytics.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should write to deploy_config, not source path
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      'apps/analytics/dist/out/wrangler.json',
+      expect.any(String),
+      'utf-8',
+    );
   });
 });
 
