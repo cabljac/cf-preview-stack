@@ -8,21 +8,33 @@ vi.mock('@actions/core', () => ({
 import * as core from '@actions/core';
 import { cleanupOrphanedDatabases } from '../cleanup.js';
 import * as d1 from '../d1.js';
+import * as kv from '../kv.js';
 
 vi.mock('../d1.js', () => ({
   listPreviewDatabases: vi.fn(),
   deleteDatabase: vi.fn(),
 }));
 
+vi.mock('../kv.js', () => ({
+  listPreviewKVNamespaces: vi.fn(),
+  deleteKVNamespace: vi.fn(),
+}));
+
 const mockDelete = vi.mocked(d1.deleteDatabase);
+const mockKVDelete = vi.mocked(kv.deleteKVNamespace);
 
 const ACCOUNT_ID = 'test-account-123';
 
-function makeMockClient() {
+function makeMockClient(kvNamespaces: Array<{ id: string; title: string }> = []) {
   return {
     d1: {
       database: {
         list: vi.fn(),
+      },
+    },
+    kv: {
+      namespaces: {
+        list: vi.fn().mockReturnValue(asyncIterable(kvNamespaces)),
       },
     },
   } as unknown as import('cloudflare').default;
@@ -185,5 +197,63 @@ describe('cleanupOrphanedDatabases', () => {
     await cleanupOrphanedDatabases(client, ACCOUNT_ID, 'fake-token', REPO);
 
     expect(core.info).toHaveBeenCalled();
+  });
+});
+
+describe('cleanupOrphanedDatabases — KV namespaces', () => {
+  test('cleans up orphaned KV namespaces for closed PRs', async () => {
+    const client = makeMockClient([
+      { id: 'kv-1', title: 'preview-pr-5-MY_KV' },
+      { id: 'kv-2', title: 'preview-pr-5-CACHE' },
+    ]);
+    (client.d1.database.list as ReturnType<typeof vi.fn>).mockReturnValue(
+      asyncIterable([]),
+    );
+
+    mockGetPullRequest.mockResolvedValue({ data: { state: 'closed' } });
+    mockKVDelete.mockResolvedValue(undefined);
+
+    await cleanupOrphanedDatabases(client, ACCOUNT_ID, 'fake-token', REPO);
+
+    expect(mockKVDelete).toHaveBeenCalledTimes(2);
+    expect(mockKVDelete).toHaveBeenCalledWith(client, ACCOUNT_ID, 'kv-1');
+    expect(mockKVDelete).toHaveBeenCalledWith(client, ACCOUNT_ID, 'kv-2');
+  });
+
+  test('handles mix of D1 and KV resources for same PR', async () => {
+    const client = makeMockClient([
+      { id: 'kv-1', title: 'preview-pr-7-MY_KV' },
+    ]);
+    (client.d1.database.list as ReturnType<typeof vi.fn>).mockReturnValue(
+      asyncIterable([
+        { uuid: 'uuid-1', name: 'preview-pr-7-mydb' },
+      ]),
+    );
+
+    mockGetPullRequest.mockResolvedValue({ data: { state: 'closed' } });
+    mockDelete.mockResolvedValue(undefined);
+    mockKVDelete.mockResolvedValue(undefined);
+
+    await cleanupOrphanedDatabases(client, ACCOUNT_ID, 'fake-token', REPO);
+
+    // Should check PR only once despite having both D1 and KV resources
+    expect(mockGetPullRequest).toHaveBeenCalledTimes(1);
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockKVDelete).toHaveBeenCalledTimes(1);
+  });
+
+  test('leaves KV namespaces for open PRs untouched', async () => {
+    const client = makeMockClient([
+      { id: 'kv-1', title: 'preview-pr-10-MY_KV' },
+    ]);
+    (client.d1.database.list as ReturnType<typeof vi.fn>).mockReturnValue(
+      asyncIterable([]),
+    );
+
+    mockGetPullRequest.mockResolvedValue({ data: { state: 'open' } });
+
+    await cleanupOrphanedDatabases(client, ACCOUNT_ID, 'fake-token', REPO);
+
+    expect(mockKVDelete).not.toHaveBeenCalled();
   });
 });

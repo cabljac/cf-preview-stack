@@ -1,34 +1,6 @@
 import type Cloudflare from 'cloudflare';
 import * as core from '@actions/core';
-
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 1000;
-
-function isRateLimited(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as Record<string, unknown>).status === 429;
-}
-
-function is404(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as Record<string, unknown>).status === 404;
-}
-
-async function withRetry<T>(fn: () => Promise<T>, baseDelayMs = BASE_DELAY_MS): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (!isRateLimited(error) || attempt === MAX_RETRIES) {
-        throw error;
-      }
-      const delay = baseDelayMs * 2 ** attempt;
-      core.warning(`Rate limited, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-  throw lastError;
-}
+import { withRetry, is404 } from './retry.js';
 
 /**
  * Create a D1 database and return its UUID.
@@ -37,7 +9,7 @@ export async function createDatabase(
   client: Cloudflare,
   accountId: string,
   name: string,
-  baseDelayMs = BASE_DELAY_MS,
+  baseDelayMs?: number,
 ): Promise<string> {
   const result = await withRetry(
     () => client.d1.database.create({ account_id: accountId, name }),

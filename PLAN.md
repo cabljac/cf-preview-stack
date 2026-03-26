@@ -159,3 +159,70 @@ Phase 0 (skeleton + types)
 ```
 
 All Phase 1 tracks are fully parallel. Within Phase 2, tracks E/F/G are parallel with each other. Phase 3 is sequential and comes last.
+
+---
+
+## Phase 4: KV Namespace Support (depends on Phase 3)
+
+Adds KV namespace provisioning alongside the existing D1 database lifecycle. Mirrors the D1 pattern: create preview namespaces per PR, rewrite wrangler configs, tear down on close, clean up orphans.
+
+### Track H: `src/kv.ts` — KV Namespace Lifecycle
+
+Wraps the Cloudflare SDK for KV namespace create/delete/list. Uses `p-retry` for rate-limit handling.
+
+Tests (`src/__tests__/kv.test.ts`):
+- [x] `createKVNamespace` calls SDK with correct title and account_id, returns id
+- [x] `deleteKVNamespace` calls SDK with correct namespace id and account_id
+- [x] `deleteKVNamespace` swallows 404 errors (already deleted)
+- [x] `deleteKVNamespace` rethrows non-404 errors
+- [x] `listPreviewKVNamespaces` filters by `preview-pr-{N}-` prefix on title
+- [x] `listPreviewKVNamespaces` paginates through all results
+- [x] Retries on rate limit (429) with exponential backoff
+- [x] Fails after max retries exhausted
+
+### Track I: Extend Existing Modules for KV
+
+#### `src/types.ts`
+- [x] Add `KVBinding` interface (`binding`, `id`)
+- [x] Add `KVNamespaceResult` interface
+- [x] Add `kv_namespaces` to `WranglerConfig`
+
+#### `src/wrangler.ts` — Parse & Rewrite KV Bindings
+- [x] Parse `kv_namespaces` array from wrangler config
+- [x] `rewriteKVNamespaces` rewrites `id` field using jsonc-parser
+- [x] Handles config with no KV bindings (empty array)
+- [x] Handles multiple KV bindings
+- [x] Combined D1 + KV config parses and rewrites both correctly
+
+#### `src/teardown.ts` — KV Teardown
+- [x] `teardownKVNamespaces` lists and deletes all KV namespaces matching PR prefix
+- [x] Handles no namespaces (clean state)
+- [x] Continues on individual delete failure
+
+#### `src/cleanup.ts` — Generalized Orphan Cleanup
+- [x] `cleanupOrphanedDatabases` handles both D1 and KV resources
+- [x] PR status check is shared (not duplicated) for D1 and KV entries
+- [x] Leaves KV namespaces for open PRs untouched
+
+#### `src/comment.ts` — KV in PR Comments
+- [x] KV namespace table in preview comment
+- [x] Teardown comment mentions KV namespaces
+
+#### `src/index.ts` — Orchestration
+- [x] Closed event tears down both D1 and KV
+- [x] Preview lifecycle provisions KV namespaces alongside D1
+- [x] Deduplicates KV namespaces by original `id` across workers
+- [x] Config rewriting chains D1 then KV
+- [x] Sets `kv_namespace_ids` output
+- [x] Passes KV results to comment function
+
+### Track J: Refactor Retry Logic
+- [x] Extract retry logic to shared `src/retry.ts` module
+- [x] Refactor `src/d1.ts` to import from `retry.ts`
+- [x] `src/kv.ts` imports from `retry.ts`
+- [x] Verify existing d1 tests still pass
+
+### Metadata & Docs
+- [x] `action.yml` — add `kv_namespace_ids` output, update descriptions
+- [x] `spec.md` — add KV sections, update non-goals/limitations
+- [x] `PLAN.md` — add Phase 4

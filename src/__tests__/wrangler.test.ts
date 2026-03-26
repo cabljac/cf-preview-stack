@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'vitest';
-import { parseWranglerConfig, rewriteWranglerConfig } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces } from '../wrangler.js';
 
 const BASIC_CONFIG = `{
   // Worker name
@@ -18,6 +18,50 @@ const BASIC_CONFIG = `{
 const NO_D1_CONFIG = `{
   "name": "static-worker",
   "main": "src/index.ts"
+}`;
+
+const KV_CONFIG = `{
+  // Worker with KV
+  "name": "kv-worker",
+  "kv_namespaces": [
+    {
+      "binding": "MY_KV",
+      "id": "original-ns-id-1234"
+    }
+  ]
+}`;
+
+const MULTI_KV_CONFIG = `{
+  "name": "multi-kv",
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "ns-cache-id"
+    },
+    {
+      "binding": "SESSIONS",
+      "id": "ns-sessions-id"
+    }
+  ]
+}`;
+
+const COMBINED_CONFIG = `{
+  // Worker with D1 and KV
+  "name": "full-worker",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mydb",
+      "database_id": "db-uuid-1234",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "MY_KV",
+      "id": "ns-id-5678"
+    }
+  ]
 }`;
 
 const MULTI_D1_CONFIG = `{
@@ -58,6 +102,7 @@ describe('parseWranglerConfig', () => {
   test('handles config with no D1 bindings — empty array', () => {
     const result = parseWranglerConfig(NO_D1_CONFIG);
     expect(result.d1_databases).toEqual([]);
+    expect(result.kv_namespaces).toEqual([]);
   });
 
   test('handles multiple D1 bindings in one config', () => {
@@ -118,5 +163,81 @@ describe('rewriteWranglerConfig', () => {
     // Verify original IDs are replaced (check exact quoted values)
     expect(result).not.toContain('"uuid-primary"');
     expect(result).not.toContain('"uuid-analytics"');
+  });
+});
+
+describe('parseWranglerConfig — KV namespaces', () => {
+  test('extracts KV bindings (binding, id)', () => {
+    const result = parseWranglerConfig(KV_CONFIG);
+    expect(result.kv_namespaces).toEqual([
+      { binding: 'MY_KV', id: 'original-ns-id-1234' },
+    ]);
+  });
+
+  test('handles config with no KV bindings — empty array', () => {
+    const result = parseWranglerConfig(BASIC_CONFIG);
+    expect(result.kv_namespaces).toEqual([]);
+  });
+
+  test('handles multiple KV bindings', () => {
+    const result = parseWranglerConfig(MULTI_KV_CONFIG);
+    expect(result.kv_namespaces).toHaveLength(2);
+    expect(result.kv_namespaces[0].binding).toBe('CACHE');
+    expect(result.kv_namespaces[1].binding).toBe('SESSIONS');
+  });
+
+  test('parses combined D1 + KV config', () => {
+    const result = parseWranglerConfig(COMBINED_CONFIG);
+    expect(result.d1_databases).toHaveLength(1);
+    expect(result.kv_namespaces).toHaveLength(1);
+    expect(result.d1_databases[0].binding).toBe('DB');
+    expect(result.kv_namespaces[0].binding).toBe('MY_KV');
+  });
+});
+
+describe('rewriteKVNamespaces', () => {
+  test('rewrites id field for matched namespaces', () => {
+    const replacements = new Map([
+      ['original-ns-id-1234', { previewId: 'new-ns-id-5678' }],
+    ]);
+    const result = rewriteKVNamespaces(KV_CONFIG, replacements);
+    expect(result).toContain('new-ns-id-5678');
+    expect(result).not.toContain('original-ns-id-1234');
+  });
+
+  test('preserves comments and formatting', () => {
+    const replacements = new Map([
+      ['original-ns-id-1234', { previewId: 'new-ns-id-5678' }],
+    ]);
+    const result = rewriteKVNamespaces(KV_CONFIG, replacements);
+    expect(result).toContain('// Worker with KV');
+    expect(result).toContain('  "name": "kv-worker"');
+  });
+
+  test('rewrites multiple KV bindings', () => {
+    const replacements = new Map([
+      ['ns-cache-id', { previewId: 'preview-cache-id' }],
+      ['ns-sessions-id', { previewId: 'preview-sessions-id' }],
+    ]);
+    const result = rewriteKVNamespaces(MULTI_KV_CONFIG, replacements);
+    expect(result).toContain('preview-cache-id');
+    expect(result).toContain('preview-sessions-id');
+    expect(result).not.toContain('"ns-cache-id"');
+    expect(result).not.toContain('"ns-sessions-id"');
+  });
+
+  test('combined D1 + KV config rewrites both correctly', () => {
+    const dbReplacements = new Map([
+      ['mydb', { previewName: 'preview-pr-42-mydb', previewId: 'new-db-uuid' }],
+    ]);
+    const kvReplacements = new Map([
+      ['ns-id-5678', { previewId: 'new-ns-id' }],
+    ]);
+    let result = rewriteWranglerConfig(COMBINED_CONFIG, dbReplacements);
+    result = rewriteKVNamespaces(result, kvReplacements);
+    expect(result).toContain('new-db-uuid');
+    expect(result).toContain('preview-pr-42-mydb');
+    expect(result).toContain('new-ns-id');
+    expect(result).toContain('// Worker with D1 and KV');
   });
 });

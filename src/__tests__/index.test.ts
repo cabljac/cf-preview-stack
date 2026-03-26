@@ -1,5 +1,5 @@
 import { test, expect, describe, vi, beforeEach } from 'vitest';
-import type { WorkerConfig, PreviewResult, DatabaseResult } from '../types.js';
+import type { WorkerConfig, PreviewResult, DatabaseResult, KVNamespaceResult } from '../types.js';
 
 // Mock @actions/core
 const mockGetInput = vi.fn();
@@ -46,14 +46,20 @@ vi.mock('../config.js', () => ({
 vi.mock('../wrangler.js', () => ({
   parseWranglerConfig: vi.fn(),
   rewriteWranglerConfig: vi.fn(),
+  rewriteKVNamespaces: vi.fn(),
 }));
 
 vi.mock('../d1.js', () => ({
   createDatabase: vi.fn(),
 }));
 
+vi.mock('../kv.js', () => ({
+  createKVNamespace: vi.fn(),
+}));
+
 vi.mock('../teardown.js', () => ({
   teardownDatabases: vi.fn(),
+  teardownKVNamespaces: vi.fn(),
 }));
 
 vi.mock('../preview.js', () => ({
@@ -76,9 +82,10 @@ vi.mock('node:fs', () => ({
 }));
 
 import { parseWorkersInput } from '../config.js';
-import { parseWranglerConfig, rewriteWranglerConfig } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces } from '../wrangler.js';
 import { createDatabase } from '../d1.js';
-import { teardownDatabases } from '../teardown.js';
+import { createKVNamespace } from '../kv.js';
+import { teardownDatabases, teardownKVNamespaces } from '../teardown.js';
 import { runMigrations, uploadPreviewVersion } from '../preview.js';
 import { postPreviewComment, postTeardownComment } from '../comment.js';
 import { cleanupOrphanedDatabases } from '../cleanup.js';
@@ -87,8 +94,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const mockParseWorkersInput = vi.mocked(parseWorkersInput);
 const mockParseWranglerConfig = vi.mocked(parseWranglerConfig);
 const mockRewriteWranglerConfig = vi.mocked(rewriteWranglerConfig);
+const mockRewriteKVNamespaces = vi.mocked(rewriteKVNamespaces);
 const mockCreateDatabase = vi.mocked(createDatabase);
+const mockCreateKVNamespace = vi.mocked(createKVNamespace);
 const mockTeardownDatabases = vi.mocked(teardownDatabases);
+const mockTeardownKVNamespaces = vi.mocked(teardownKVNamespaces);
 const mockRunMigrations = vi.mocked(runMigrations);
 const mockUploadPreviewVersion = vi.mocked(uploadPreviewVersion);
 const mockPostPreviewComment = vi.mocked(postPreviewComment);
@@ -125,14 +135,16 @@ function setupStandardMocks() {
   mockParseWorkersInput.mockReturnValue([
     { path: './api/wrangler.jsonc', workingDirectory: './api' },
   ]);
-  mockReadFileSync.mockReturnValue('{"name":"api","d1_databases":[]}');
+  mockReadFileSync.mockReturnValue('{"name":"api","d1_databases":[],"kv_namespaces":[]}');
   mockParseWranglerConfig.mockReturnValue({
     name: 'api',
     d1_databases: [
       { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
     ],
+    kv_namespaces: [],
   });
   mockTeardownDatabases.mockResolvedValue(['preview-pr-42-mydb']);
+  mockTeardownKVNamespaces.mockResolvedValue([]);
   mockCreateDatabase.mockResolvedValue('new-uuid-123');
   mockRewriteWranglerConfig.mockReturnValue('{"name":"api","d1_databases":[{"binding":"DB","database_name":"preview-pr-42-mydb","database_id":"new-uuid-123"}]}');
   mockRunMigrations.mockResolvedValue(1);
@@ -158,8 +170,13 @@ describe('index — orchestration', () => {
     const { run } = await import('../index.js');
     await run();
 
-    // 1. Teardown first
+    // 1. Teardown first (both D1 and KV)
     expect(mockTeardownDatabases).toHaveBeenCalledWith(
+      expect.anything(),
+      'test-account-id',
+      42,
+    );
+    expect(mockTeardownKVNamespaces).toHaveBeenCalledWith(
       expect.anything(),
       'test-account-id',
       42,
@@ -212,6 +229,7 @@ describe('index — orchestration', () => {
     await run();
 
     expect(mockTeardownDatabases).toHaveBeenCalled();
+    expect(mockTeardownKVNamespaces).toHaveBeenCalled();
     expect(mockCreateDatabase).toHaveBeenCalled();
     expect(mockRunMigrations).toHaveBeenCalled();
     expect(mockUploadPreviewVersion).toHaveBeenCalled();
@@ -227,22 +245,29 @@ describe('index — orchestration', () => {
     await run();
 
     expect(mockTeardownDatabases).toHaveBeenCalled();
+    expect(mockTeardownKVNamespaces).toHaveBeenCalled();
     expect(mockCreateDatabase).toHaveBeenCalled();
     expect(mockRunMigrations).toHaveBeenCalled();
     expect(mockUploadPreviewVersion).toHaveBeenCalled();
     expect(mockPostPreviewComment).toHaveBeenCalled();
   });
 
-  test('on closed event: calls teardown → teardown comment', async () => {
+  test('on closed event: calls teardown for both D1 and KV → teardown comment', async () => {
     setupInputs();
     setEventAction('closed');
     mockTeardownDatabases.mockResolvedValue(['preview-pr-42-mydb']);
+    mockTeardownKVNamespaces.mockResolvedValue(['preview-pr-42-MY_KV']);
     mockPostTeardownComment.mockResolvedValue(undefined);
 
     const { run } = await import('../index.js');
     await run();
 
     expect(mockTeardownDatabases).toHaveBeenCalledWith(
+      expect.anything(),
+      'test-account-id',
+      42,
+    );
+    expect(mockTeardownKVNamespaces).toHaveBeenCalledWith(
       expect.anything(),
       'test-account-id',
       42,
@@ -255,6 +280,7 @@ describe('index — orchestration', () => {
 
     // Should NOT provision or upload
     expect(mockCreateDatabase).not.toHaveBeenCalled();
+    expect(mockCreateKVNamespace).not.toHaveBeenCalled();
     expect(mockUploadPreviewVersion).not.toHaveBeenCalled();
     expect(mockPostPreviewComment).not.toHaveBeenCalled();
   });
@@ -279,7 +305,7 @@ describe('index — orchestration', () => {
     expect(mockUploadPreviewVersion).not.toHaveBeenCalled();
   });
 
-  test('sets outputs: preview_urls, database_ids, preview_alias', async () => {
+  test('sets outputs: preview_urls, database_ids, kv_namespace_ids, preview_alias', async () => {
     setupInputs();
     setupStandardMocks();
     setEventAction('opened');
@@ -294,6 +320,10 @@ describe('index — orchestration', () => {
     expect(mockSetOutput).toHaveBeenCalledWith(
       'database_ids',
       expect.stringContaining('new-uuid-123'),
+    );
+    expect(mockSetOutput).toHaveBeenCalledWith(
+      'kv_namespace_ids',
+      expect.any(String),
     );
     expect(mockSetOutput).toHaveBeenCalledWith('preview_alias', 'pr-42');
   });
@@ -317,15 +347,18 @@ describe('index — orchestration', () => {
         d1_databases: [
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-1', migrations_dir: './migrations' },
         ],
+        kv_namespaces: [],
       })
       .mockReturnValueOnce({
         name: 'web',
         d1_databases: [
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-2', migrations_dir: './migrations' },
         ],
+        kv_namespaces: [],
       });
 
     mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
     // Only called once for "shared-db"
     mockCreateDatabase.mockResolvedValue('shared-uuid');
     mockRewriteWranglerConfig.mockReturnValue('rewritten');
@@ -361,8 +394,10 @@ describe('index — orchestration', () => {
     mockParseWranglerConfig.mockReturnValue({
       name: 'api',
       d1_databases: [],
+      kv_namespaces: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
     mockRewriteWranglerConfig.mockReturnValue('{"name":"api"}');
     mockUploadPreviewVersion.mockResolvedValue({
       workerName: 'api',
@@ -400,11 +435,13 @@ describe('index — orchestration', () => {
     setupInputs({ comment: false });
     setEventAction('closed');
     mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
 
     const { run } = await import('../index.js');
     await run();
 
     expect(mockTeardownDatabases).toHaveBeenCalled();
+    expect(mockTeardownKVNamespaces).toHaveBeenCalled();
     expect(mockPostTeardownComment).not.toHaveBeenCalled();
   });
 
@@ -448,7 +485,7 @@ describe('index — orchestration', () => {
     expect(mockInfo).toHaveBeenCalledWith('Ignoring unsupported action: labeled');
   });
 
-  test('does not rewrite config for worker with no D1 bindings', async () => {
+  test('does not rewrite config for worker with no D1 or KV bindings', async () => {
     setupInputs();
     setEventAction('opened');
 
@@ -459,8 +496,10 @@ describe('index — orchestration', () => {
     mockParseWranglerConfig.mockReturnValue({
       name: 'api',
       d1_databases: [],
+      kv_namespaces: [],
     });
     mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
     mockRunMigrations.mockResolvedValue(0);
     mockUploadPreviewVersion.mockResolvedValue({
       workerName: 'api',
@@ -473,6 +512,7 @@ describe('index — orchestration', () => {
 
     expect(mockWriteFileSync).not.toHaveBeenCalled();
     expect(mockRewriteWranglerConfig).not.toHaveBeenCalled();
+    expect(mockRewriteKVNamespaces).not.toHaveBeenCalled();
   });
 
   test('skips duplicate migrations for shared databases across workers', async () => {
@@ -492,15 +532,18 @@ describe('index — orchestration', () => {
         d1_databases: [
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-1', migrations_dir: './migrations' },
         ],
+        kv_namespaces: [],
       })
       .mockReturnValueOnce({
         name: 'web',
         d1_databases: [
           { binding: 'DB', database_name: 'shared-db', database_id: 'orig-2', migrations_dir: './migrations' },
         ],
+        kv_namespaces: [],
       });
 
     mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
     mockCreateDatabase.mockResolvedValue('shared-uuid');
     mockRewriteWranglerConfig.mockReturnValue('rewritten');
     mockRunMigrations.mockResolvedValue(1);
@@ -520,5 +563,192 @@ describe('index — orchestration', () => {
     // Second worker should get empty bindings (already migrated)
     const secondMigrationBindings = mockRunMigrations.mock.calls[1][0];
     expect(secondMigrationBindings).toHaveLength(0);
+  });
+});
+
+describe('index — KV namespace orchestration', () => {
+  test('provisions KV namespaces alongside D1 databases', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [
+        { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
+      ],
+      kv_namespaces: [
+        { binding: 'MY_KV', id: 'orig-kv-id' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockCreateDatabase.mockResolvedValue('new-db-uuid');
+    mockCreateKVNamespace.mockResolvedValue('new-kv-id');
+    mockRewriteWranglerConfig.mockReturnValue('rewritten-d1');
+    mockRewriteKVNamespaces.mockReturnValue('rewritten-d1-and-kv');
+    mockRunMigrations.mockResolvedValue(1);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should create both D1 database and KV namespace
+    expect(mockCreateDatabase).toHaveBeenCalledWith(
+      expect.anything(),
+      'test-account-id',
+      'preview-pr-42-mydb',
+    );
+    expect(mockCreateKVNamespace).toHaveBeenCalledWith(
+      expect.anything(),
+      'test-account-id',
+      'preview-pr-42-MY_KV',
+    );
+
+    // Should rewrite both D1 and KV
+    expect(mockRewriteWranglerConfig).toHaveBeenCalled();
+    expect(mockRewriteKVNamespaces).toHaveBeenCalled();
+
+    // Should write rewritten config
+    expect(mockWriteFileSync).toHaveBeenCalled();
+
+    // Should set kv_namespace_ids output
+    expect(mockSetOutput).toHaveBeenCalledWith(
+      'kv_namespace_ids',
+      expect.stringContaining('new-kv-id'),
+    );
+  });
+
+  test('deduplicates KV namespaces by original id across workers', async () => {
+    setupInputs({
+      workers: '- ./api/wrangler.jsonc\n- ./web/wrangler.jsonc',
+    });
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+      { path: './web/wrangler.jsonc', workingDirectory: './web' },
+    ]);
+    mockReadFileSync.mockReturnValueOnce('{"name":"api"}').mockReturnValueOnce('{"name":"web"}');
+    mockParseWranglerConfig
+      .mockReturnValueOnce({
+        name: 'api',
+        d1_databases: [],
+        kv_namespaces: [
+          { binding: 'SHARED_KV', id: 'shared-kv-id' },
+        ],
+      })
+      .mockReturnValueOnce({
+        name: 'web',
+        d1_databases: [],
+        kv_namespaces: [
+          { binding: 'SHARED_KV', id: 'shared-kv-id' },
+        ],
+      });
+
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockCreateKVNamespace.mockResolvedValue('preview-kv-id');
+    mockRewriteKVNamespaces.mockReturnValue('rewritten');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion
+      .mockResolvedValueOnce({ workerName: 'api', previewUrl: 'pr-42-api.example.workers.dev' })
+      .mockResolvedValueOnce({ workerName: 'web', previewUrl: 'pr-42-web.example.workers.dev' });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should only create one KV namespace despite two workers sharing the same id
+    expect(mockCreateKVNamespace).toHaveBeenCalledTimes(1);
+    expect(mockUploadPreviewVersion).toHaveBeenCalledTimes(2);
+  });
+
+  test('worker with KV but no D1 still provisions KV and uploads', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+      kv_namespaces: [
+        { binding: 'MY_KV', id: 'orig-kv-id' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockCreateKVNamespace.mockResolvedValue('new-kv-id');
+    mockRewriteKVNamespaces.mockReturnValue('rewritten');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockCreateDatabase).not.toHaveBeenCalled();
+    expect(mockCreateKVNamespace).toHaveBeenCalledTimes(1);
+    expect(mockUploadPreviewVersion).toHaveBeenCalledTimes(1);
+  });
+
+  test('passes KV results to comment function', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+      kv_namespaces: [
+        { binding: 'MY_KV', id: 'orig-kv-id' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockTeardownKVNamespaces.mockResolvedValue([]);
+    mockCreateKVNamespace.mockResolvedValue('new-kv-id');
+    mockRewriteKVNamespaces.mockReturnValue('rewritten');
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // postPreviewComment should be called with KV results as the 6th argument
+    expect(mockPostPreviewComment).toHaveBeenCalledWith(
+      'test-gh-token',
+      { owner: 'test-owner', repo: 'test-repo' },
+      42,
+      expect.any(Array), // previews
+      expect.any(Array), // databases
+      expect.arrayContaining([
+        expect.objectContaining({
+          bindingName: 'MY_KV',
+          originalId: 'orig-kv-id',
+          previewTitle: 'preview-pr-42-MY_KV',
+          previewId: 'new-kv-id',
+        }),
+      ]),
+    );
   });
 });
