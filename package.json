@@ -1,0 +1,26 @@
+{
+  "name": "cf-preview-stack",
+  "version": "1.0.0",
+  "description": "Vercel-style preview environments for Cloudflare Workers + D1",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.4",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "cloudflare": "^4.2.0",
+    "jsonc-parser": "^3.3.1",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
+  }
+}

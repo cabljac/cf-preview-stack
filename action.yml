@@ -1,0 +1,38 @@
+name: 'cf-preview-stack'
+description: 'Vercel-style preview environments for Cloudflare Workers + D1'
+inputs:
+  cloudflare_api_token:
+    description: 'Cloudflare API token with Workers Scripts and D1 permissions.'
+    required: true
+  cloudflare_account_id:
+    description: 'Cloudflare account ID.'
+    required: true
+  workers:
+    description: 'YAML list of wrangler config paths. Accepts a simple list of paths or objects with path and working_directory.'
+    required: true
+  github_token:
+    description: 'GitHub token for posting PR comments.'
+    required: false
+    default: ${{ github.token }}
+  comment:
+    description: 'Whether to post/update a summary comment on the PR.'
+    required: false
+    default: 'true'
+  wrangler_version:
+    description: 'Wrangler version to install. Pin to a specific version for stability (e.g. 3.99.0).'
+    required: false
+    default: 'latest'
+  cleanup:
+    description: 'Run orphan cleanup mode instead of normal preview lifecycle.'
+    required: false
+    default: 'false'
+outputs:
+  preview_urls:
+    description: 'JSON object mapping worker name to preview *.workers.dev URL.'
+  database_ids:
+    description: 'JSON object mapping original database name to preview database ID.'
+  preview_alias:
+    description: 'The alias used for preview versions, e.g. pr-42.'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
