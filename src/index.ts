@@ -3,7 +3,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import Cloudflare from 'cloudflare';
 import { parseWorkersInput } from './config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, type DatabaseReplacement, type KVReplacement, type WorkflowReplacement } from './wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars, type DatabaseReplacement, type KVReplacement, type WorkflowReplacement } from './wrangler.js';
 import { createDatabase } from './d1.js';
 import { createKVNamespace } from './kv.js';
 import { teardownDatabases, teardownKVNamespaces } from './teardown.js';
@@ -26,6 +26,13 @@ export async function run(): Promise<void> {
     const githubToken = core.getInput('github_token');
     const shouldComment = core.getBooleanInput('comment');
     const cleanup = core.getBooleanInput('cleanup');
+    const secretsInput = core.getInput('secrets');
+    const secrets: Record<string, string> = secretsInput ? JSON.parse(secretsInput) : {};
+
+    // Mask secret values in CI logs
+    for (const value of Object.values(secrets)) {
+      core.setSecret(value);
+    }
 
     const client = new Cloudflare({ apiToken: cloudflareApiToken });
     const repo = github.context.repo;
@@ -154,6 +161,9 @@ export async function run(): Promise<void> {
       }
       if (wfReplacements.size > 0) {
         rewritten = rewriteWorkflowNames(rewritten, wfReplacements);
+      }
+      if (Object.keys(secrets).length > 0) {
+        rewritten = rewriteVars(rewritten, secrets);
       }
       if (rewritten !== originalContent) {
         writeFileSync(configPath, rewritten, 'utf-8');

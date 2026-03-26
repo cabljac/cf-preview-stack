@@ -37992,6 +37992,12 @@ async function run() {
         const githubToken = core.getInput('github_token');
         const shouldComment = core.getBooleanInput('comment');
         const cleanup = core.getBooleanInput('cleanup');
+        const secretsInput = core.getInput('secrets');
+        const secrets = secretsInput ? JSON.parse(secretsInput) : {};
+        // Mask secret values in CI logs
+        for (const value of Object.values(secrets)) {
+            core.setSecret(value);
+        }
         const client = new cloudflare_1.default({ apiToken: cloudflareApiToken });
         const repo = github.context.repo;
         const action = github.context.payload.action ?? '';
@@ -38103,6 +38109,9 @@ async function run() {
             }
             if (wfReplacements.size > 0) {
                 rewritten = (0, wrangler_js_1.rewriteWorkflowNames)(rewritten, wfReplacements);
+            }
+            if (Object.keys(secrets).length > 0) {
+                rewritten = (0, wrangler_js_1.rewriteVars)(rewritten, secrets);
             }
             if (rewritten !== originalContent) {
                 (0, node_fs_1.writeFileSync)(configPath, rewritten, 'utf-8');
@@ -38559,6 +38568,7 @@ exports.parseWranglerConfig = parseWranglerConfig;
 exports.rewriteWranglerConfig = rewriteWranglerConfig;
 exports.rewriteKVNamespaces = rewriteKVNamespaces;
 exports.rewriteWorkflowNames = rewriteWorkflowNames;
+exports.rewriteVars = rewriteVars;
 const jsonc_parser_1 = __nccwpck_require__(64732);
 const MODIFICATION_OPTIONS = {
     formattingOptions: { tabSize: 2, insertSpaces: true },
@@ -38659,6 +38669,20 @@ function rewriteWorkflowNames(content, replacements) {
         if (!replacement)
             continue;
         const edits = (0, jsonc_parser_1.modify)(result, ['workflows', i, 'name'], replacement.previewName, MODIFICATION_OPTIONS);
+        result = (0, jsonc_parser_1.applyEdits)(result, edits);
+    }
+    return result;
+}
+/**
+ * Rewrite a wrangler.jsonc config string, adding or overwriting entries
+ * in the top-level `vars` object. Each key-value pair becomes an
+ * environment variable available to the Worker at runtime.
+ * Preserves comments, formatting, and whitespace.
+ */
+function rewriteVars(content, vars) {
+    let result = content;
+    for (const [key, value] of Object.entries(vars)) {
+        const edits = (0, jsonc_parser_1.modify)(result, ['vars', key], value, MODIFICATION_OPTIONS);
         result = (0, jsonc_parser_1.applyEdits)(result, edits);
     }
     return result;

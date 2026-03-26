@@ -1,5 +1,6 @@
 import { test, expect, describe } from 'vitest';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames } from '../wrangler.js';
+import { parse as parseJsonc } from 'jsonc-parser';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars } from '../wrangler.js';
 
 const BASIC_CONFIG = `{
   // Worker name
@@ -127,6 +128,15 @@ const COMBINED_ALL_CONFIG = `{
       "class_name": "MyWorkflow"
     }
   ]
+}`;
+
+const VARS_CONFIG = `{
+  // Worker with existing vars
+  "name": "vars-worker",
+  "main": "src/index.ts",
+  "vars": {
+    "EXISTING_VAR": "keep-me"
+  }
 }`;
 
 const MULTI_D1_CONFIG = `{
@@ -421,5 +431,70 @@ describe('rewriteWorkflowNames', () => {
     expect(result).toContain('new-ns-id');
     expect(result).toContain('preview-pr-42-my-workflow');
     expect(result).toContain('// Worker with everything');
+  });
+});
+
+describe('rewriteVars', () => {
+  test('adds vars to a config with no existing vars section', () => {
+    const result = rewriteVars(NO_D1_CONFIG, { AUTH_SECRET: 'my-secret-123' });
+    const parsed = JSON.parse(result);
+    expect(parsed.vars.AUTH_SECRET).toBe('my-secret-123');
+  });
+
+  test('overwrites existing vars values', () => {
+    const result = rewriteVars(VARS_CONFIG, { EXISTING_VAR: 'new-value' });
+    const parsed = parseJsonc(result);
+    expect(parsed.vars.EXISTING_VAR).toBe('new-value');
+  });
+
+  test('merges new vars with existing vars', () => {
+    const result = rewriteVars(VARS_CONFIG, { NEW_KEY: 'new-value' });
+    const parsed = parseJsonc(result);
+    expect(parsed.vars.EXISTING_VAR).toBe('keep-me');
+    expect(parsed.vars.NEW_KEY).toBe('new-value');
+  });
+
+  test('handles multiple vars at once', () => {
+    const result = rewriteVars(NO_D1_CONFIG, {
+      AUTH_SECRET: 'secret-1',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+    });
+    const parsed = JSON.parse(result);
+    expect(parsed.vars.AUTH_SECRET).toBe('secret-1');
+    expect(parsed.vars.GOOGLE_CLIENT_ID).toBe('google-id');
+    expect(parsed.vars.GOOGLE_CLIENT_SECRET).toBe('google-secret');
+  });
+
+  test('preserves JSONC comments and formatting', () => {
+    const result = rewriteVars(VARS_CONFIG, { NEW_KEY: 'val' });
+    expect(result).toContain('// Worker with existing vars');
+    expect(result).toContain('  "name": "vars-worker"');
+  });
+
+  test('empty vars object returns content unchanged', () => {
+    const result = rewriteVars(VARS_CONFIG, {});
+    expect(result).toBe(VARS_CONFIG);
+  });
+
+  test('works chained with D1 + KV + workflow rewrites', () => {
+    const dbReplacements = new Map([
+      ['mydb', { previewName: 'preview-pr-42-mydb', previewId: 'new-db-uuid' }],
+    ]);
+    const kvReplacements = new Map([
+      ['ns-id-5678', { previewId: 'new-ns-id' }],
+    ]);
+    const wfReplacements = new Map([
+      ['my-workflow', { previewName: 'preview-pr-42-my-workflow' }],
+    ]);
+    let result = rewriteWranglerConfig(COMBINED_ALL_CONFIG, dbReplacements);
+    result = rewriteKVNamespaces(result, kvReplacements);
+    result = rewriteWorkflowNames(result, wfReplacements);
+    result = rewriteVars(result, { AUTH_SECRET: 'preview-secret' });
+    const parsed = parseJsonc(result);
+    expect(parsed.vars.AUTH_SECRET).toBe('preview-secret');
+    expect(parsed.d1_databases[0].database_id).toBe('new-db-uuid');
+    expect(parsed.kv_namespaces[0].id).toBe('new-ns-id');
+    expect(parsed.workflows[0].name).toBe('preview-pr-42-my-workflow');
   });
 });

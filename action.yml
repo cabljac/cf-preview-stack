@@ -26,6 +26,10 @@ inputs:
     description: 'Run orphan cleanup mode instead of normal preview lifecycle.'
     required: false
     default: 'false'
+  secrets:
+    description: 'JSON object of environment variable names to values. Injected as vars in each worker config before upload. Use for preview-specific secrets like AUTH_SECRET.'
+    required: false
+    default: '{}'
 outputs:
   preview_urls:
     description: 'JSON object mapping worker name to preview *.workers.dev URL.'
