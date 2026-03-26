@@ -37824,9 +37824,20 @@ function parseWorkersInput(input) {
         }
         if (typeof entry === 'object' && entry !== null && 'path' in entry) {
             const obj = entry;
+            const workDir = obj.working_directory ?? (node_path_1.default.dirname(obj.path) || '.');
+            // When working_directory is explicitly provided and the path isn't already
+            // within it, resolve the path relative to working_directory.
+            let configPath = obj.path;
+            if (obj.working_directory) {
+                const normalizedPath = node_path_1.default.normalize(obj.path);
+                const normalizedDir = node_path_1.default.normalize(obj.working_directory);
+                if (!normalizedPath.startsWith(normalizedDir + node_path_1.default.sep) && normalizedPath !== normalizedDir) {
+                    configPath = node_path_1.default.join(obj.working_directory, obj.path);
+                }
+            }
             return {
-                path: obj.path,
-                workingDirectory: obj.working_directory ?? (node_path_1.default.dirname(obj.path) || '.'),
+                path: configPath,
+                workingDirectory: workDir,
             };
         }
         throw new Error(`Invalid workers entry: ${JSON.stringify(entry)}`);

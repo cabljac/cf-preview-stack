@@ -41,6 +41,39 @@ describe('parseWorkersInput', () => {
     ]);
   });
 
+  test('resolves path relative to working_directory when path is not already within it', () => {
+    const input = `
+- path: wrangler.jsonc
+  working_directory: ./api
+`;
+    const result = parseWorkersInput(input);
+    expect(result).toEqual([
+      { path: 'api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+  });
+
+  test('resolves ./prefixed path relative to working_directory', () => {
+    const input = `
+- path: ./wrangler.jsonc
+  working_directory: ./api
+`;
+    const result = parseWorkersInput(input);
+    expect(result).toEqual([
+      { path: 'api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+  });
+
+  test('does not double-join when path already includes working_directory', () => {
+    const input = `
+- path: ./packages/api/wrangler.jsonc
+  working_directory: ./packages/api
+`;
+    const result = parseWorkersInput(input);
+    expect(result).toEqual([
+      { path: './packages/api/wrangler.jsonc', workingDirectory: './packages/api' },
+    ]);
+  });
+
   test('resolves relative paths against repo root', () => {
     const input = `
 - wrangler.jsonc

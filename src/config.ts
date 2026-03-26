@@ -29,9 +29,22 @@ export function parseWorkersInput(input: string): WorkerConfig[] {
 
     if (typeof entry === 'object' && entry !== null && 'path' in entry) {
       const obj = entry as { path: string; working_directory?: string };
+      const workDir = obj.working_directory ?? (path.dirname(obj.path) || '.');
+
+      // When working_directory is explicitly provided and the path isn't already
+      // within it, resolve the path relative to working_directory.
+      let configPath = obj.path;
+      if (obj.working_directory) {
+        const normalizedPath = path.normalize(obj.path);
+        const normalizedDir = path.normalize(obj.working_directory);
+        if (!normalizedPath.startsWith(normalizedDir + path.sep) && normalizedPath !== normalizedDir) {
+          configPath = path.join(obj.working_directory, obj.path);
+        }
+      }
+
       return {
-        path: obj.path,
-        workingDirectory: obj.working_directory ?? (path.dirname(obj.path) || '.'),
+        path: configPath,
+        workingDirectory: workDir,
       };
     }
 
