@@ -1,5 +1,5 @@
 import { parse, modify, applyEdits, type ModificationOptions } from 'jsonc-parser';
-import type { WranglerConfig, D1Binding } from './types.js';
+import type { WranglerConfig, D1Binding, KVBinding } from './types.js';
 
 const MODIFICATION_OPTIONS: ModificationOptions = {
   formattingOptions: { tabSize: 2, insertSpaces: true },
@@ -25,9 +25,17 @@ export function parseWranglerConfig(content: string): WranglerConfig {
     },
   );
 
+  const kvNamespaces: KVBinding[] = (root.kv_namespaces ?? []).map(
+    (ns: Record<string, string>) => ({
+      binding: ns.binding!,
+      id: ns.id!,
+    }),
+  );
+
   return {
     name: root.name,
     d1_databases: d1Databases,
+    kv_namespaces: kvNamespaces,
   };
 }
 
@@ -63,6 +71,37 @@ export function rewriteWranglerConfig(
     result = applyEdits(result, edits);
 
     edits = modify(result, ['d1_databases', i, 'database_id'], replacement.previewId, MODIFICATION_OPTIONS);
+    result = applyEdits(result, edits);
+  }
+
+  return result;
+}
+
+/** Replacement info for a single KV namespace. */
+export interface KVReplacement {
+  previewId: string;
+}
+
+/**
+ * Rewrite a wrangler.jsonc config string, replacing the `id` field
+ * for each KV namespace binding whose original id is in the replacements map.
+ * Preserves comments, formatting, and whitespace.
+ */
+export function rewriteKVNamespaces(
+  content: string,
+  replacements: Map<string, KVReplacement>,
+): string {
+  const root = parse(content);
+  const namespaces: Array<Record<string, string>> = root.kv_namespaces ?? [];
+
+  let result = content;
+
+  for (let i = namespaces.length - 1; i >= 0; i--) {
+    const ns = namespaces[i];
+    const replacement = replacements.get(ns.id);
+    if (!replacement) continue;
+
+    const edits = modify(result, ['kv_namespaces', i, 'id'], replacement.previewId, MODIFICATION_OPTIONS);
     result = applyEdits(result, edits);
   }
 

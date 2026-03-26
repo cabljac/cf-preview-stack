@@ -3,13 +3,14 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import Cloudflare from 'cloudflare';
 import { parseWorkersInput } from './config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, type DatabaseReplacement } from './wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, type DatabaseReplacement, type KVReplacement } from './wrangler.js';
 import { createDatabase } from './d1.js';
-import { teardownDatabases } from './teardown.js';
+import { createKVNamespace } from './kv.js';
+import { teardownDatabases, teardownKVNamespaces } from './teardown.js';
 import { runMigrations, uploadPreviewVersion } from './preview.js';
 import { postPreviewComment, postTeardownComment } from './comment.js';
 import { cleanupOrphanedDatabases } from './cleanup.js';
-import type { PreviewResult, DatabaseResult } from './types.js';
+import type { PreviewResult, DatabaseResult, KVNamespaceResult } from './types.js';
 
 const PREVIEW_ACTIONS = new Set(['opened', 'synchronize', 'reopened']);
 
@@ -46,6 +47,7 @@ export async function run(): Promise<void> {
     // Closed PR — teardown only
     if (action === 'closed') {
       await teardownDatabases(client, cloudflareAccountId, prNumber);
+      await teardownKVNamespaces(client, cloudflareAccountId, prNumber);
       if (shouldComment) {
         await postTeardownComment(githubToken, repo, prNumber);
       }
@@ -60,15 +62,18 @@ export async function run(): Promise<void> {
 
     const workers = parseWorkersInput(workersInput);
 
-    // Step 1: Teardown existing preview databases
+    // Step 1: Teardown existing preview resources
     await teardownDatabases(client, cloudflareAccountId, prNumber);
+    await teardownKVNamespaces(client, cloudflareAccountId, prNumber);
 
-    // Step 2: Provision databases (deduplicated by database_name)
+    // Step 2: Provision databases and KV namespaces (deduplicated)
     const dbMap = new Map<string, { previewName: string; previewId: string }>();
+    const kvMap = new Map<string, { previewTitle: string; previewId: string; bindingName: string }>();
     const allPreviews: PreviewResult[] = [];
     const allDatabaseResults: DatabaseResult[] = [];
+    const allKVResults: KVNamespaceResult[] = [];
 
-    // Parse all worker configs and collect unique databases
+    // Parse all worker configs
     const workerConfigs = workers.map((worker) => {
       const content = readFileSync(worker.path, 'utf-8');
       const config = parseWranglerConfig(content);
@@ -86,22 +91,48 @@ export async function run(): Promise<void> {
       }
     }
 
+    // Create preview KV namespaces, deduplicating by original id
+    for (const { config } of workerConfigs) {
+      for (const binding of config.kv_namespaces) {
+        if (kvMap.has(binding.id)) continue;
+
+        const previewTitle = `preview-pr-${prNumber}-${binding.binding}`;
+        const previewId = await createKVNamespace(client, cloudflareAccountId, previewTitle);
+        kvMap.set(binding.id, { previewTitle, previewId, bindingName: binding.binding });
+      }
+    }
+
     // Step 3: Rewrite configs, run migrations (deduplicated), and upload each worker
     const migratedDbs = new Set<string>();
 
     for (const { worker, config, originalContent } of workerConfigs) {
-      // Build replacements map for this worker's bindings
-      const replacements = new Map<string, DatabaseReplacement>();
+      // Build D1 replacements map for this worker's bindings
+      const dbReplacements = new Map<string, DatabaseReplacement>();
       for (const binding of config.d1_databases) {
         const entry = dbMap.get(binding.database_name);
         if (entry) {
-          replacements.set(binding.database_name, entry);
+          dbReplacements.set(binding.database_name, entry);
         }
       }
 
-      // Rewrite and write config if there are replacements
-      if (replacements.size > 0) {
-        const rewritten = rewriteWranglerConfig(originalContent, replacements);
+      // Build KV replacements map for this worker's bindings
+      const kvReplacements = new Map<string, KVReplacement>();
+      for (const binding of config.kv_namespaces) {
+        const entry = kvMap.get(binding.id);
+        if (entry) {
+          kvReplacements.set(binding.id, { previewId: entry.previewId });
+        }
+      }
+
+      // Rewrite config (D1 first, then KV)
+      let rewritten = originalContent;
+      if (dbReplacements.size > 0) {
+        rewritten = rewriteWranglerConfig(rewritten, dbReplacements);
+      }
+      if (kvReplacements.size > 0) {
+        rewritten = rewriteKVNamespaces(rewritten, kvReplacements);
+      }
+      if (rewritten !== originalContent) {
         writeFileSync(worker.path, rewritten, 'utf-8');
       }
 
@@ -145,11 +176,24 @@ export async function run(): Promise<void> {
           });
         }
       }
+
+      // Collect KV results for this worker (deduplicated)
+      for (const binding of config.kv_namespaces) {
+        const entry = kvMap.get(binding.id);
+        if (entry && !allKVResults.some((r) => r.originalId === binding.id)) {
+          allKVResults.push({
+            bindingName: entry.bindingName,
+            originalId: binding.id,
+            previewTitle: entry.previewTitle,
+            previewId: entry.previewId,
+          });
+        }
+      }
     }
 
     // Step 4: Comment on PR
     if (shouldComment) {
-      await postPreviewComment(githubToken, repo, prNumber, allPreviews, allDatabaseResults);
+      await postPreviewComment(githubToken, repo, prNumber, allPreviews, allDatabaseResults, allKVResults);
     }
 
     // Step 5: Set outputs
@@ -163,8 +207,14 @@ export async function run(): Promise<void> {
       databaseIds[d.originalName] = d.previewId;
     }
 
+    const kvNamespaceIds: Record<string, string> = {};
+    for (const kv of allKVResults) {
+      kvNamespaceIds[kv.originalId] = kv.previewId;
+    }
+
     core.setOutput('preview_urls', JSON.stringify(previewUrls));
     core.setOutput('database_ids', JSON.stringify(databaseIds));
+    core.setOutput('kv_namespace_ids', JSON.stringify(kvNamespaceIds));
     core.setOutput('preview_alias', `pr-${prNumber}`);
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));

@@ -1,8 +1,8 @@
 name: 'cf-preview-stack'
-description: 'Vercel-style preview environments for Cloudflare Workers + D1'
+description: 'Vercel-style preview environments for Cloudflare Workers + D1 + KV'
 inputs:
   cloudflare_api_token:
-    description: 'Cloudflare API token with Workers Scripts and D1 permissions.'
+    description: 'Cloudflare API token with Workers Scripts, D1, and Workers KV Storage permissions.'
     required: true
   cloudflare_account_id:
     description: 'Cloudflare account ID.'
@@ -31,6 +31,8 @@ outputs:
     description: 'JSON object mapping worker name to preview *.workers.dev URL.'
   database_ids:
     description: 'JSON object mapping original database name to preview database ID.'
+  kv_namespace_ids:
+    description: 'JSON object mapping original KV namespace ID to preview namespace ID.'
   preview_alias:
     description: 'The alias used for preview versions, e.g. pr-42.'
 runs:

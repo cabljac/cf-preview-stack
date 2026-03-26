@@ -18,12 +18,22 @@ export interface D1Binding {
   migrations_dir?: string;
 }
 
+/** A KV namespace binding extracted from a wrangler config. */
+export interface KVBinding {
+  /** The binding name used in the Worker (e.g. MY_KV). */
+  binding: string;
+  /** The namespace ID. */
+  id: string;
+}
+
 /** Parsed wrangler config with fields relevant to this action. */
 export interface WranglerConfig {
   /** The worker name from the config. */
   name: string;
   /** D1 database bindings defined in the config. */
   d1_databases: D1Binding[];
+  /** KV namespace bindings defined in the config. */
+  kv_namespaces: KVBinding[];
 }
 
 /** Result of uploading a preview version of a worker. */
@@ -44,6 +54,18 @@ export interface DatabaseResult {
   previewId: string;
   /** Number of migrations applied. */
   migrationsApplied: number;
+}
+
+/** Result of provisioning a preview KV namespace. */
+export interface KVNamespaceResult {
+  /** The binding name from the wrangler config. */
+  bindingName: string;
+  /** The original namespace ID. */
+  originalId: string;
+  /** The preview namespace title (e.g. preview-pr-42-MY_KV). */
+  previewTitle: string;
+  /** The preview namespace ID. */
+  previewId: string;
 }
 
 /** All parsed action inputs. */

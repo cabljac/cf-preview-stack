@@ -1,6 +1,6 @@
 import { test, expect, describe, vi, beforeEach } from 'vitest';
 import { postPreviewComment, postTeardownComment, COMMENT_MARKER } from '../comment.js';
-import type { PreviewResult, DatabaseResult } from '../types.js';
+import type { PreviewResult, DatabaseResult, KVNamespaceResult } from '../types.js';
 
 const mockCreateComment = vi.fn();
 const mockUpdateComment = vi.fn();
@@ -154,6 +154,50 @@ describe('comment pagination', () => {
     // Should update, not create
     expect(mockUpdateComment).toHaveBeenCalledTimes(1);
     expect(mockCreateComment).not.toHaveBeenCalled();
+  });
+});
+
+describe('postPreviewComment — KV namespaces', () => {
+  test('includes KV namespace table when KV results present', async () => {
+    mockListComments.mockResolvedValue({ data: [] });
+    mockCreateComment.mockResolvedValue({ data: { id: 1 } });
+
+    const previews: PreviewResult[] = [
+      { workerName: 'api', previewUrl: 'pr-42-api.example.workers.dev' },
+    ];
+    const databases: DatabaseResult[] = [];
+    const kvNamespaces: KVNamespaceResult[] = [
+      { bindingName: 'MY_KV', originalId: 'ns-original-id', previewTitle: 'preview-pr-42-MY_KV', previewId: 'ns-preview-id' },
+    ];
+
+    await postPreviewComment('fake-token', REPO, 42, previews, databases, kvNamespaces);
+
+    const body = mockCreateComment.mock.calls[0][0].body as string;
+    expect(body).toContain('KV Namespace');
+    expect(body).toContain('MY_KV');
+    expect(body).toContain('preview-pr-42-MY_KV');
+  });
+
+  test('omits KV table when no KV results', async () => {
+    mockListComments.mockResolvedValue({ data: [] });
+    mockCreateComment.mockResolvedValue({ data: { id: 1 } });
+
+    await postPreviewComment('fake-token', REPO, 42, [], [], []);
+
+    const body = mockCreateComment.mock.calls[0][0].body as string;
+    expect(body).not.toContain('KV Namespace');
+  });
+});
+
+describe('postTeardownComment — KV mention', () => {
+  test('teardown comment mentions KV namespaces', async () => {
+    mockListComments.mockResolvedValue({ data: [] });
+    mockCreateComment.mockResolvedValue({ data: { id: 1 } });
+
+    await postTeardownComment('fake-token', REPO, 42);
+
+    const body = mockCreateComment.mock.calls[0][0].body as string;
+    expect(body).toContain('KV namespaces');
   });
 });
 

@@ -1,5 +1,5 @@
 import * as github from '@actions/github';
-import type { PreviewResult, DatabaseResult } from './types.js';
+import type { PreviewResult, DatabaseResult, KVNamespaceResult } from './types.js';
 
 export const COMMENT_MARKER = '<!-- cf-preview-stack -->';
 
@@ -38,6 +38,7 @@ function formatPreviewBody(
   prNumber: number,
   previews: PreviewResult[],
   databases: DatabaseResult[],
+  kvNamespaces: KVNamespaceResult[] = [],
 ): string {
   const lines: string[] = [COMMENT_MARKER, '', `## ⚡ Preview Stack — PR #${prNumber}`, ''];
 
@@ -57,6 +58,14 @@ function formatPreviewBody(
     lines.push('');
   }
 
+  if (kvNamespaces.length > 0) {
+    lines.push('| KV Namespace | Binding | Preview Title |', '|--------------|---------|---------------|');
+    for (const kv of kvNamespaces) {
+      lines.push(`| ${kv.bindingName} | ${kv.originalId} | ${kv.previewTitle} |`);
+    }
+    lines.push('');
+  }
+
   lines.push(`Last updated: ${new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}`);
 
   return lines.join('\n');
@@ -68,7 +77,7 @@ function formatTeardownBody(prNumber: number): string {
     '',
     `## ⚡ Preview Stack — PR #${prNumber} (torn down)`,
     '',
-    'Preview databases have been deleted. Preview URLs are no longer functional.',
+    'Preview databases and KV namespaces have been deleted. Preview URLs are no longer functional.',
   ];
   return lines.join('\n');
 }
@@ -82,9 +91,10 @@ export async function postPreviewComment(
   prNumber: number,
   previews: PreviewResult[],
   databases: DatabaseResult[],
+  kvNamespaces: KVNamespaceResult[] = [],
 ): Promise<void> {
   const octokit = github.getOctokit(token);
-  const body = formatPreviewBody(prNumber, previews, databases);
+  const body = formatPreviewBody(prNumber, previews, databases, kvNamespaces);
   const existingId = await findExistingComment(octokit, repo, prNumber);
 
   if (existingId) {
