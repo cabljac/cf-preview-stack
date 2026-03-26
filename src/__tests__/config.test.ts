@@ -59,4 +59,33 @@ describe('parseWorkersInput', () => {
   test('throws on invalid YAML', () => {
     expect(() => parseWorkersInput('}{not yaml')).toThrow();
   });
+
+  test('parses migration_command from expanded object', () => {
+    const input = `
+- path: ./api/wrangler.jsonc
+  working_directory: ./api
+  migration_command: "npx drizzle-kit push"
+`;
+    const result = parseWorkersInput(input);
+    expect(result).toEqual([
+      { path: './api/wrangler.jsonc', workingDirectory: './api', migrationCommand: 'npx drizzle-kit push' },
+    ]);
+  });
+
+  test('migrationCommand is undefined when not specified', () => {
+    const input = `
+- path: ./api/wrangler.jsonc
+  working_directory: ./api
+`;
+    const result = parseWorkersInput(input);
+    expect(result[0].migrationCommand).toBeUndefined();
+  });
+
+  test('migrationCommand is undefined for simple string entries', () => {
+    const input = `
+- ./api/wrangler.jsonc
+`;
+    const result = parseWorkersInput(input);
+    expect(result[0].migrationCommand).toBeUndefined();
+  });
 });

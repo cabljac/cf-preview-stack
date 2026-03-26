@@ -58,6 +58,21 @@ export async function runMigrations(
 }
 
 /**
+ * Run a custom migration command (e.g. "npx drizzle-kit push") instead of
+ * wrangler's built-in D1 migrations. The command runs in the worker's working
+ * directory with Cloudflare credentials in the environment.
+ */
+export async function runCustomMigration(
+  command: string,
+  workingDirectory: string,
+  cfEnv: CloudflareEnv,
+): Promise<void> {
+  const env = makeEnv(cfEnv);
+  core.info(`Running custom migration: ${command} (cwd: ${workingDirectory})`);
+  await execAsync(command, { cwd: workingDirectory, env });
+}
+
+/**
  * Parse a preview URL from wrangler's stdout output.
  * Looks for URLs matching the *.workers.dev pattern.
  */

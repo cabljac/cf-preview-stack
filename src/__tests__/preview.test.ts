@@ -5,7 +5,7 @@ vi.mock('@actions/core', () => ({
   info: vi.fn(),
 }));
 
-import { runMigrations, uploadPreviewVersion } from '../preview.js';
+import { runMigrations, runCustomMigration, uploadPreviewVersion } from '../preview.js';
 import type { D1Binding } from '../types.js';
 
 const mockExec = vi.fn();
@@ -84,6 +84,44 @@ describe('runMigrations', () => {
     ];
 
     await expect(runMigrations(bindings, '/work/api', ENV_VARS)).rejects.toThrow();
+  });
+});
+
+describe('runCustomMigration', () => {
+  test('runs the provided command in the working directory', async () => {
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+      cb(null, { stdout: 'Migrations pushed', stderr: '' });
+    });
+
+    await runCustomMigration('npx drizzle-kit push', '/work/api', ENV_VARS);
+
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    const cmd = mockExec.mock.calls[0][0] as string;
+    expect(cmd).toBe('npx drizzle-kit push');
+
+    const opts = mockExec.mock.calls[0][1] as Record<string, unknown>;
+    expect(opts.cwd).toBe('/work/api');
+  });
+
+  test('passes CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as env vars', async () => {
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+      cb(null, { stdout: 'OK', stderr: '' });
+    });
+
+    await runCustomMigration('npx drizzle-kit push', '/work/api', ENV_VARS);
+
+    const opts = mockExec.mock.calls[0][1] as Record<string, Record<string, string>>;
+    expect(opts.env.CLOUDFLARE_API_TOKEN).toBe('test-token');
+    expect(opts.env.CLOUDFLARE_ACCOUNT_ID).toBe('test-account');
+  });
+
+  test('throws on non-zero exit code', async () => {
+    const execError = new Error('Command failed');
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
+      cb(execError);
+    });
+
+    await expect(runCustomMigration('npx drizzle-kit push', '/work/api', ENV_VARS)).rejects.toThrow();
   });
 });
 

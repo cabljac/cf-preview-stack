@@ -28,10 +28,11 @@ export function parseWorkersInput(input: string): WorkerConfig[] {
     }
 
     if (typeof entry === 'object' && entry !== null && 'path' in entry) {
-      const obj = entry as { path: string; working_directory?: string };
+      const obj = entry as { path: string; working_directory?: string; migration_command?: string };
       return {
         path: obj.path,
         workingDirectory: obj.working_directory ?? (path.dirname(obj.path) || '.'),
+        migrationCommand: obj.migration_command,
       };
     }
 

@@ -58,6 +58,7 @@ vi.mock('../teardown.js', () => ({
 
 vi.mock('../preview.js', () => ({
   runMigrations: vi.fn(),
+  runCustomMigration: vi.fn(),
   uploadPreviewVersion: vi.fn(),
 }));
 
@@ -79,7 +80,7 @@ import { parseWorkersInput } from '../config.js';
 import { parseWranglerConfig, rewriteWranglerConfig } from '../wrangler.js';
 import { createDatabase } from '../d1.js';
 import { teardownDatabases } from '../teardown.js';
-import { runMigrations, uploadPreviewVersion } from '../preview.js';
+import { runMigrations, runCustomMigration, uploadPreviewVersion } from '../preview.js';
 import { postPreviewComment, postTeardownComment } from '../comment.js';
 import { cleanupOrphanedDatabases } from '../cleanup.js';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -90,6 +91,7 @@ const mockRewriteWranglerConfig = vi.mocked(rewriteWranglerConfig);
 const mockCreateDatabase = vi.mocked(createDatabase);
 const mockTeardownDatabases = vi.mocked(teardownDatabases);
 const mockRunMigrations = vi.mocked(runMigrations);
+const mockRunCustomMigration = vi.mocked(runCustomMigration);
 const mockUploadPreviewVersion = vi.mocked(uploadPreviewVersion);
 const mockPostPreviewComment = vi.mocked(postPreviewComment);
 const mockPostTeardownComment = vi.mocked(postTeardownComment);
@@ -473,6 +475,54 @@ describe('index — orchestration', () => {
 
     expect(mockWriteFileSync).not.toHaveBeenCalled();
     expect(mockRewriteWranglerConfig).not.toHaveBeenCalled();
+  });
+
+  test('uses custom migration command instead of runMigrations when migrationCommand is set', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api', migrationCommand: 'npx drizzle-kit push' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api","d1_databases":[]}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [
+        { binding: 'DB', database_name: 'mydb', database_id: 'orig-uuid', migrations_dir: './migrations' },
+      ],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockCreateDatabase.mockResolvedValue('new-uuid-123');
+    mockRewriteWranglerConfig.mockReturnValue('rewritten');
+    mockRunCustomMigration.mockResolvedValue(undefined);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should use custom migration command, NOT runMigrations
+    expect(mockRunCustomMigration).toHaveBeenCalledWith(
+      'npx drizzle-kit push',
+      './api',
+      expect.objectContaining({ apiToken: 'test-cf-token', accountId: 'test-account-id' }),
+    );
+    expect(mockRunMigrations).not.toHaveBeenCalled();
+  });
+
+  test('uses runMigrations when migrationCommand is not set', async () => {
+    setupInputs();
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRunMigrations).toHaveBeenCalled();
+    expect(mockRunCustomMigration).not.toHaveBeenCalled();
   });
 
   test('skips duplicate migrations for shared databases across workers', async () => {

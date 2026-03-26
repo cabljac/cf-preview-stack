@@ -6,7 +6,7 @@ import { parseWorkersInput } from './config.js';
 import { parseWranglerConfig, rewriteWranglerConfig, type DatabaseReplacement } from './wrangler.js';
 import { createDatabase } from './d1.js';
 import { teardownDatabases } from './teardown.js';
-import { runMigrations, uploadPreviewVersion } from './preview.js';
+import { runMigrations, runCustomMigration, uploadPreviewVersion } from './preview.js';
 import { postPreviewComment, postTeardownComment } from './comment.js';
 import { cleanupOrphanedDatabases } from './cleanup.js';
 import type { PreviewResult, DatabaseResult } from './types.js';
@@ -105,19 +105,26 @@ export async function run(): Promise<void> {
         writeFileSync(worker.path, rewritten, 'utf-8');
       }
 
-      // Build updated bindings, filtering out already-migrated databases
-      const updatedBindings = config.d1_databases
-        .filter((b) => !migratedDbs.has(b.database_name))
-        .map((b) => {
-          const entry = dbMap.get(b.database_name);
-          if (entry) {
-            return { ...b, database_name: entry.previewName, database_id: entry.previewId };
-          }
-          return b;
-        });
+      // Run migrations — either custom command or default wrangler d1 migrations
+      let migrationsApplied: number;
 
-      // Run migrations only for databases not yet migrated
-      const migrationsApplied = await runMigrations(updatedBindings, worker.workingDirectory, cfEnv);
+      if (worker.migrationCommand) {
+        await runCustomMigration(worker.migrationCommand, worker.workingDirectory, cfEnv);
+        migrationsApplied = 0;
+      } else {
+        // Build updated bindings, filtering out already-migrated databases
+        const updatedBindings = config.d1_databases
+          .filter((b) => !migratedDbs.has(b.database_name))
+          .map((b) => {
+            const entry = dbMap.get(b.database_name);
+            if (entry) {
+              return { ...b, database_name: entry.previewName, database_id: entry.previewId };
+            }
+            return b;
+          });
+
+        migrationsApplied = await runMigrations(updatedBindings, worker.workingDirectory, cfEnv);
+      }
 
       // Mark these databases as migrated
       for (const binding of config.d1_databases) {

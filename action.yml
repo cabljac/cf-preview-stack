@@ -8,7 +8,7 @@ inputs:
     description: 'Cloudflare account ID.'
     required: true
   workers:
-    description: 'YAML list of wrangler config paths. Accepts a simple list of paths or objects with path and working_directory.'
+    description: 'YAML list of wrangler config paths. Accepts a simple list of paths or objects with path, working_directory, and migration_command. Set migration_command to use a custom migration tool (e.g. "npx drizzle-kit push") instead of wrangler d1 migrations.'
     required: true
   github_token:
     description: 'GitHub token for posting PR comments.'

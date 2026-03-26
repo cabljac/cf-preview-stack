@@ -4,6 +4,8 @@ export interface WorkerConfig {
   path: string;
   /** Working directory for wrangler commands. Inferred from config path if not specified. */
   workingDirectory: string;
+  /** Optional custom migration command (e.g. "npx drizzle-kit push"). Replaces default wrangler d1 migrations. */
+  migrationCommand?: string;
 }
 
 /** A D1 database binding extracted from a wrangler config. */
