@@ -13,13 +13,25 @@ async function findExistingComment(
   repo: Repo,
   prNumber: number,
 ): Promise<number | null> {
-  const { data: comments } = await octokit.rest.issues.listComments({
-    ...repo,
-    issue_number: prNumber,
-  });
+  let page = 1;
+  while (true) {
+    const { data: comments } = await octokit.rest.issues.listComments({
+      ...repo,
+      issue_number: prNumber,
+      per_page: 100,
+      page,
+    });
 
-  const existing = comments.find((c) => c.body?.includes(COMMENT_MARKER));
-  return existing?.id ?? null;
+    const existing = comments.find((c) => c.body?.includes(COMMENT_MARKER));
+    if (existing) {
+      return existing.id;
+    }
+
+    if (comments.length < 100) {
+      return null;
+    }
+    page++;
+  }
 }
 
 function formatPreviewBody(

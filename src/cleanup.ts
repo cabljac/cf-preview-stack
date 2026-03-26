@@ -55,12 +55,16 @@ export async function cleanupOrphanedDatabases(
   // Check each PR status and collect closed ones
   const closedPRs = new Set<number>();
   for (const prNumber of prNumbers) {
-    const { data: pr } = await octokit.rest.pulls.get({
-      ...repo,
-      pull_number: prNumber,
-    });
-    if (pr.state !== 'open') {
-      closedPRs.add(prNumber);
+    try {
+      const { data: pr } = await octokit.rest.pulls.get({
+        ...repo,
+        pull_number: prNumber,
+      });
+      if (pr.state !== 'open') {
+        closedPRs.add(prNumber);
+      }
+    } catch (error) {
+      core.warning(`Failed to check PR #${prNumber} status, skipping: ${error}`);
     }
   }
 

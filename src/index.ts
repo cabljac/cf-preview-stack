@@ -28,13 +28,17 @@ export async function run(): Promise<void> {
 
     const client = new Cloudflare({ apiToken: cloudflareApiToken });
     const repo = github.context.repo;
-    const prNumber = github.context.payload.pull_request?.number ?? 0;
     const action = github.context.payload.action ?? '';
 
     // Cleanup mode — independent of PR lifecycle
     if (cleanup) {
       await cleanupOrphanedDatabases(client, cloudflareAccountId, githubToken, repo);
       return;
+    }
+
+    const prNumber = github.context.payload.pull_request?.number;
+    if (!prNumber) {
+      throw new Error('No pull request number found in event payload');
     }
 
     const cfEnv = { apiToken: cloudflareApiToken, accountId: cloudflareAccountId };
@@ -82,7 +86,9 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Step 3: Rewrite configs, run migrations, and upload each worker
+    // Step 3: Rewrite configs, run migrations (deduplicated), and upload each worker
+    const migratedDbs = new Set<string>();
+
     for (const { worker, config, originalContent } of workerConfigs) {
       // Build replacements map for this worker's bindings
       const replacements = new Map<string, DatabaseReplacement>();
@@ -99,17 +105,24 @@ export async function run(): Promise<void> {
         writeFileSync(worker.path, rewritten, 'utf-8');
       }
 
-      // Build the updated bindings list for migrations
-      const updatedBindings = config.d1_databases.map((b) => {
-        const entry = dbMap.get(b.database_name);
-        if (entry) {
-          return { ...b, database_name: entry.previewName, database_id: entry.previewId };
-        }
-        return b;
-      });
+      // Build updated bindings, filtering out already-migrated databases
+      const updatedBindings = config.d1_databases
+        .filter((b) => !migratedDbs.has(b.database_name))
+        .map((b) => {
+          const entry = dbMap.get(b.database_name);
+          if (entry) {
+            return { ...b, database_name: entry.previewName, database_id: entry.previewId };
+          }
+          return b;
+        });
 
-      // Run migrations
+      // Run migrations only for databases not yet migrated
       const migrationsApplied = await runMigrations(updatedBindings, worker.workingDirectory, cfEnv);
+
+      // Mark these databases as migrated
+      for (const binding of config.d1_databases) {
+        migratedDbs.add(binding.database_name);
+      }
 
       // Upload preview version
       const preview = await uploadPreviewVersion(

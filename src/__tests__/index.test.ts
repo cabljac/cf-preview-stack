@@ -420,4 +420,105 @@ describe('index — orchestration', () => {
 
     expect(mockSetFailed).toHaveBeenCalledWith('bad input');
   });
+
+  test('fails if PR number is missing from payload', async () => {
+    setupInputs();
+    setEventAction('opened');
+    (github.context.payload as Record<string, unknown>).pull_request = undefined;
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockSetFailed).toHaveBeenCalledWith('No pull request number found in event payload');
+
+    // Restore for other tests
+    (github.context.payload as Record<string, unknown>).pull_request = { number: 42 };
+  });
+
+  test('ignores unsupported action types', async () => {
+    setupInputs();
+    setEventAction('labeled');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockTeardownDatabases).not.toHaveBeenCalled();
+    expect(mockCreateDatabase).not.toHaveBeenCalled();
+    expect(mockUploadPreviewVersion).not.toHaveBeenCalled();
+    expect(mockInfo).toHaveBeenCalledWith('Ignoring unsupported action: labeled');
+  });
+
+  test('does not rewrite config for worker with no D1 bindings', async () => {
+    setupInputs();
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
+    mockReadFileSync.mockReturnValue('{"name":"api"}');
+    mockParseWranglerConfig.mockReturnValue({
+      name: 'api',
+      d1_databases: [],
+    });
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockRunMigrations.mockResolvedValue(0);
+    mockUploadPreviewVersion.mockResolvedValue({
+      workerName: 'api',
+      previewUrl: 'pr-42-api.example.workers.dev',
+    });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(mockRewriteWranglerConfig).not.toHaveBeenCalled();
+  });
+
+  test('skips duplicate migrations for shared databases across workers', async () => {
+    setupInputs({
+      workers: '- ./api/wrangler.jsonc\n- ./web/wrangler.jsonc',
+    });
+    setEventAction('opened');
+
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+      { path: './web/wrangler.jsonc', workingDirectory: './web' },
+    ]);
+    mockReadFileSync.mockReturnValueOnce('{"name":"api"}').mockReturnValueOnce('{"name":"web"}');
+    mockParseWranglerConfig
+      .mockReturnValueOnce({
+        name: 'api',
+        d1_databases: [
+          { binding: 'DB', database_name: 'shared-db', database_id: 'orig-1', migrations_dir: './migrations' },
+        ],
+      })
+      .mockReturnValueOnce({
+        name: 'web',
+        d1_databases: [
+          { binding: 'DB', database_name: 'shared-db', database_id: 'orig-2', migrations_dir: './migrations' },
+        ],
+      });
+
+    mockTeardownDatabases.mockResolvedValue([]);
+    mockCreateDatabase.mockResolvedValue('shared-uuid');
+    mockRewriteWranglerConfig.mockReturnValue('rewritten');
+    mockRunMigrations.mockResolvedValue(1);
+    mockUploadPreviewVersion
+      .mockResolvedValueOnce({ workerName: 'api', previewUrl: 'pr-42-api.example.workers.dev' })
+      .mockResolvedValueOnce({ workerName: 'web', previewUrl: 'pr-42-web.example.workers.dev' });
+    mockPostPreviewComment.mockResolvedValue(undefined);
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // First worker should run migrations with the shared-db binding
+    const firstMigrationBindings = mockRunMigrations.mock.calls[0][0];
+    expect(firstMigrationBindings).toHaveLength(1);
+    expect(firstMigrationBindings[0].database_name).toBe('preview-pr-42-shared-db');
+
+    // Second worker should get empty bindings (already migrated)
+    const secondMigrationBindings = mockRunMigrations.mock.calls[1][0];
+    expect(secondMigrationBindings).toHaveLength(0);
+  });
 });

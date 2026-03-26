@@ -124,6 +124,39 @@ describe('postTeardownComment', () => {
   });
 });
 
+describe('comment pagination', () => {
+  test('paginates through comments to find marker', async () => {
+    // First page: 100 comments without marker
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      body: `Comment ${i + 1}`,
+    }));
+    // Second page: has the marker comment
+    const page2 = [
+      { id: 201, body: `${COMMENT_MARKER}\nold preview` },
+    ];
+
+    mockListComments
+      .mockResolvedValueOnce({ data: page1 })
+      .mockResolvedValueOnce({ data: page2 });
+    mockUpdateComment.mockResolvedValue({ data: { id: 201 } });
+
+    await postPreviewComment('fake-token', REPO, 42, [], []);
+
+    // Should have called listComments twice (paginated)
+    expect(mockListComments).toHaveBeenCalledTimes(2);
+    expect(mockListComments).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, per_page: 100 }),
+    );
+    expect(mockListComments).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 2, per_page: 100 }),
+    );
+    // Should update, not create
+    expect(mockUpdateComment).toHaveBeenCalledTimes(1);
+    expect(mockCreateComment).not.toHaveBeenCalled();
+  });
+});
+
 describe('comment skipping', () => {
   test('skips commenting when comment input is false', async () => {
     // postPreviewComment and postTeardownComment shouldn't be called at all
