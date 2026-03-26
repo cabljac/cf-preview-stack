@@ -147,6 +147,29 @@ describe('cleanupOrphanedDatabases', () => {
     expect(mockDelete).not.toHaveBeenCalled();
   });
 
+  test('continues cleanup if one PR lookup fails', async () => {
+    const client = makeMockClient();
+    (client.d1.database.list as ReturnType<typeof vi.fn>).mockReturnValue(
+      asyncIterable([
+        { uuid: 'uuid-1', name: 'preview-pr-5-db1' },
+        { uuid: 'uuid-2', name: 'preview-pr-8-db1' },
+      ]),
+    );
+
+    mockGetPullRequest
+      .mockRejectedValueOnce(new Error('API error'))       // PR 5 lookup fails
+      .mockResolvedValueOnce({ data: { state: 'closed' } }); // PR 8 is closed
+
+    mockDelete.mockResolvedValue(undefined);
+
+    await cleanupOrphanedDatabases(client, ACCOUNT_ID, 'fake-token', REPO);
+
+    // Should still delete databases for PR 8 despite PR 5 lookup failing
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockDelete).toHaveBeenCalledWith(client, ACCOUNT_ID, 'uuid-2');
+    expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('PR #5'));
+  });
+
   test('logs summary of cleaned-up PRs', async () => {
     const client = makeMockClient();
     (client.d1.database.list as ReturnType<typeof vi.fn>).mockReturnValue(
