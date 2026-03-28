@@ -3,10 +3,10 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import Cloudflare from 'cloudflare';
 import { parseWorkersInput } from './config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars, type DatabaseReplacement, type KVReplacement, type WorkflowReplacement } from './wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars, rewriteWorkerName, type DatabaseReplacement, type KVReplacement, type WorkflowReplacement } from './wrangler.js';
 import { createDatabase } from './d1.js';
 import { createKVNamespace } from './kv.js';
-import { teardownDatabases, teardownKVNamespaces } from './teardown.js';
+import { teardownDatabases, teardownKVNamespaces, teardownWorkers } from './teardown.js';
 import { runMigrations, uploadPreviewVersion } from './preview.js';
 import { postPreviewComment, postTeardownComment } from './comment.js';
 import { cleanupOrphanedDatabases } from './cleanup.js';
@@ -53,8 +53,10 @@ export async function run(): Promise<void> {
 
     // Closed PR — teardown only
     if (action === 'closed') {
+      const workers = parseWorkersInput(workersInput);
       await teardownDatabases(client, cloudflareAccountId, prNumber);
       await teardownKVNamespaces(client, cloudflareAccountId, prNumber);
+      await teardownWorkers(workers, prNumber, cfEnv);
       if (shouldComment) {
         await postTeardownComment(githubToken, repo, prNumber);
       }
@@ -165,6 +167,10 @@ export async function run(): Promise<void> {
       if (Object.keys(secrets).length > 0) {
         rewritten = rewriteVars(rewritten, secrets);
       }
+      // Always rename the worker to an isolated PR worker so the production
+      // worker is never touched by the preview action.
+      const prWorkerName = `${config.name}-pr-${prNumber}`;
+      rewritten = rewriteWorkerName(rewritten, prWorkerName);
       if (rewritten !== originalContent) {
         writeFileSync(configPath, rewritten, 'utf-8');
       }

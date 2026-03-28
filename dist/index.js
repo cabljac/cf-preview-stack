@@ -38013,8 +38013,10 @@ async function run() {
         const cfEnv = { apiToken: cloudflareApiToken, accountId: cloudflareAccountId };
         // Closed PR — teardown only
         if (action === 'closed') {
+            const workers = (0, config_js_1.parseWorkersInput)(workersInput);
             await (0, teardown_js_1.teardownDatabases)(client, cloudflareAccountId, prNumber);
             await (0, teardown_js_1.teardownKVNamespaces)(client, cloudflareAccountId, prNumber);
+            await (0, teardown_js_1.teardownWorkers)(workers, prNumber, cfEnv);
             if (shouldComment) {
                 await (0, comment_js_1.postTeardownComment)(githubToken, repo, prNumber);
             }
@@ -38113,6 +38115,10 @@ async function run() {
             if (Object.keys(secrets).length > 0) {
                 rewritten = (0, wrangler_js_1.rewriteVars)(rewritten, secrets);
             }
+            // Always rename the worker to an isolated PR worker so the production
+            // worker is never touched by the preview action.
+            const prWorkerName = `${config.name}-pr-${prNumber}`;
+            rewritten = (0, wrangler_js_1.rewriteWorkerName)(rewritten, prWorkerName);
             if (rewritten !== originalContent) {
                 (0, node_fs_1.writeFileSync)(configPath, rewritten, 'utf-8');
             }
@@ -38319,6 +38325,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runMigrations = runMigrations;
 exports.uploadPreviewVersion = uploadPreviewVersion;
+exports.deleteWorker = deleteWorker;
 const node_child_process_1 = __nccwpck_require__(31421);
 const core = __importStar(__nccwpck_require__(16966));
 function execAsync(command, options) {
@@ -38359,39 +38366,43 @@ async function runMigrations(bindings, workingDirectory, cfEnv, configPath) {
     return count;
 }
 /**
- * Parse a preview URL from wrangler's stdout output.
- * Prefers the "Version Preview Alias URL" line (stable alias like pr-42-worker.subdomain.workers.dev),
- * falls back to "Version Preview URL" (version-id-based), then any *.workers.dev match.
+ * Parse a workers.dev URL from wrangler deploy stdout.
  */
-function parsePreviewUrl(stdout) {
-    const aliasMatch = stdout.match(/Version Preview Alias URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-    if (aliasMatch)
-        return aliasMatch[2];
-    const versionMatch = stdout.match(/Version Preview URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-    if (versionMatch)
-        return versionMatch[2];
-    const genericMatch = stdout.match(/(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-    return genericMatch ? genericMatch[2] : null;
+function parseDeployUrl(stdout) {
+    const match = stdout.match(/https?:\/\/([\w.-]+\.workers\.dev)/);
+    return match ? match[1] : null;
 }
 /**
- * Upload a preview version of a worker using wrangler versions upload.
- * Returns the worker name and preview URL.
+ * Deploy an isolated PR worker using wrangler deploy.
+ * The config must already have the PR worker name written in (via rewriteWorkerName).
+ * Returns the worker name and its workers.dev URL.
  */
 async function uploadPreviewVersion(workerName, workingDirectory, prNumber, cfEnv, configPath) {
-    const alias = `pr-${prNumber}`;
     const configFlag = configPath ? ` -c ${configPath}` : '';
-    const cmd = `npx wrangler versions upload --preview-alias ${alias}${configFlag}`;
-    core.info(`Uploading preview version: ${cmd} (cwd: ${workingDirectory})`);
+    const cmd = `npx wrangler deploy${configFlag}`;
+    core.info(`Deploying PR worker: ${cmd} (cwd: ${workingDirectory})`);
     const env = makeEnv(cfEnv);
     const { stdout } = await execAsync(cmd, { cwd: workingDirectory, env });
     core.info(`wrangler output: ${stdout}`);
-    const parsedUrl = parsePreviewUrl(stdout);
-    const previewUrl = parsedUrl ?? `${alias}-${workerName}.workers.dev`;
-    core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback — wrangler did not return a URL)'}`);
-    return {
-        workerName,
-        previewUrl,
-    };
+    const parsedUrl = parseDeployUrl(stdout);
+    const prWorkerName = `${workerName}-pr-${prNumber}`;
+    const previewUrl = parsedUrl ?? `${prWorkerName}.workers.dev`;
+    core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback)'}`);
+    return { workerName, previewUrl };
+}
+/**
+ * Delete a deployed PR worker by name.
+ */
+async function deleteWorker(workerName, workingDirectory, cfEnv) {
+    const cmd = `npx wrangler delete --name ${workerName} --force`;
+    core.info(`Deleting PR worker: ${cmd} (cwd: ${workingDirectory})`);
+    const env = makeEnv(cfEnv);
+    try {
+        await execAsync(cmd, { cwd: workingDirectory, env });
+    }
+    catch (error) {
+        core.warning(`Failed to delete worker ${workerName}: ${error}`);
+    }
 }
 
 
@@ -38515,9 +38526,13 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.teardownDatabases = teardownDatabases;
 exports.teardownKVNamespaces = teardownKVNamespaces;
+exports.teardownWorkers = teardownWorkers;
+const node_fs_1 = __nccwpck_require__(73024);
 const core = __importStar(__nccwpck_require__(16966));
 const d1_js_1 = __nccwpck_require__(50799);
 const kv_js_1 = __nccwpck_require__(68325);
+const wrangler_js_1 = __nccwpck_require__(12726);
+const preview_js_1 = __nccwpck_require__(80254);
 /**
  * Tear down all preview databases for a given PR number.
  * Continues deleting remaining databases if one fails. Returns the names of successfully deleted databases.
@@ -38564,6 +38579,28 @@ async function teardownKVNamespaces(client, accountId, prNumber) {
     }
     return deleted;
 }
+/**
+ * Tear down all PR workers deployed for a given PR number.
+ * Derives PR worker names from the original wrangler configs.
+ */
+async function teardownWorkers(workers, prNumber, cfEnv) {
+    const deleted = [];
+    for (const worker of workers) {
+        try {
+            const content = (0, node_fs_1.readFileSync)(worker.path, 'utf-8');
+            const config = (0, wrangler_js_1.parseWranglerConfig)(content);
+            const prWorkerName = `${config.name}-pr-${prNumber}`;
+            await (0, preview_js_1.deleteWorker)(prWorkerName, worker.workingDirectory, cfEnv);
+            deleted.push(prWorkerName);
+        }
+        catch (error) {
+            core.warning(`Failed to tear down worker for ${worker.path}: ${error}`);
+        }
+    }
+    if (deleted.length > 0) {
+        core.info(`Deleted PR workers: ${deleted.join(', ')}`);
+    }
+}
 
 
 /***/ }),
@@ -38579,6 +38616,7 @@ exports.rewriteWranglerConfig = rewriteWranglerConfig;
 exports.rewriteKVNamespaces = rewriteKVNamespaces;
 exports.rewriteWorkflowNames = rewriteWorkflowNames;
 exports.rewriteVars = rewriteVars;
+exports.rewriteWorkerName = rewriteWorkerName;
 const jsonc_parser_1 = __nccwpck_require__(64732);
 const MODIFICATION_OPTIONS = {
     formattingOptions: { tabSize: 2, insertSpaces: true },
@@ -38695,6 +38733,19 @@ function rewriteVars(content, vars) {
         const edits = (0, jsonc_parser_1.modify)(result, ['vars', key], value, MODIFICATION_OPTIONS);
         result = (0, jsonc_parser_1.applyEdits)(result, edits);
     }
+    return result;
+}
+/**
+ * Rewrite the worker name and enable workers_dev so the PR worker gets
+ * a *.workers.dev URL and is fully isolated from the production worker.
+ * Preserves comments, formatting, and whitespace.
+ */
+function rewriteWorkerName(content, name) {
+    let result = content;
+    let edits = (0, jsonc_parser_1.modify)(result, ['name'], name, MODIFICATION_OPTIONS);
+    result = (0, jsonc_parser_1.applyEdits)(result, edits);
+    edits = (0, jsonc_parser_1.modify)(result, ['workers_dev'], true, MODIFICATION_OPTIONS);
+    result = (0, jsonc_parser_1.applyEdits)(result, edits);
     return result;
 }
 
