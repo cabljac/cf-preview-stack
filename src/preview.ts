@@ -60,24 +60,17 @@ export async function runMigrations(
 }
 
 /**
- * Parse a preview URL from wrangler's stdout output.
- * Prefers the "Version Preview Alias URL" line (stable alias like pr-42-worker.subdomain.workers.dev),
- * falls back to "Version Preview URL" (version-id-based), then any *.workers.dev match.
+ * Parse a workers.dev URL from wrangler deploy stdout.
  */
-function parsePreviewUrl(stdout: string): string | null {
-  const aliasMatch = stdout.match(/Version Preview Alias URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-  if (aliasMatch) return aliasMatch[2];
-
-  const versionMatch = stdout.match(/Version Preview URL:\s*(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-  if (versionMatch) return versionMatch[2];
-
-  const genericMatch = stdout.match(/(https?:\/\/)?([\w.-]+\.workers\.dev)/);
-  return genericMatch ? genericMatch[2] : null;
+function parseDeployUrl(stdout: string): string | null {
+  const match = stdout.match(/https?:\/\/([\w.-]+\.workers\.dev)/);
+  return match ? match[1] : null;
 }
 
 /**
- * Upload a preview version of a worker using wrangler versions upload.
- * Returns the worker name and preview URL.
+ * Deploy an isolated PR worker using wrangler deploy.
+ * The config must already have the PR worker name written in (via rewriteWorkerName).
+ * Returns the worker name and its workers.dev URL.
  */
 export async function uploadPreviewVersion(
   workerName: string,
@@ -86,21 +79,36 @@ export async function uploadPreviewVersion(
   cfEnv: CloudflareEnv,
   configPath?: string,
 ): Promise<PreviewResult> {
-  const alias = `pr-${prNumber}`;
   const configFlag = configPath ? ` -c ${configPath}` : '';
-  const cmd = `npx wrangler versions upload --preview-alias ${alias}${configFlag}`;
-  core.info(`Uploading preview version: ${cmd} (cwd: ${workingDirectory})`);
+  const cmd = `npx wrangler deploy${configFlag}`;
+  core.info(`Deploying PR worker: ${cmd} (cwd: ${workingDirectory})`);
 
   const env = makeEnv(cfEnv);
   const { stdout } = await execAsync(cmd, { cwd: workingDirectory, env });
 
   core.info(`wrangler output: ${stdout}`);
-  const parsedUrl = parsePreviewUrl(stdout);
-  const previewUrl = parsedUrl ?? `${alias}-${workerName}.workers.dev`;
-  core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback — wrangler did not return a URL)'}`);
+  const parsedUrl = parseDeployUrl(stdout);
+  const prWorkerName = `${workerName}-pr-${prNumber}`;
+  const previewUrl = parsedUrl ?? `${prWorkerName}.workers.dev`;
+  core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback)'}`);
 
-  return {
-    workerName,
-    previewUrl,
-  };
+  return { workerName, previewUrl };
+}
+
+/**
+ * Delete a deployed PR worker by name.
+ */
+export async function deleteWorker(
+  workerName: string,
+  workingDirectory: string,
+  cfEnv: CloudflareEnv,
+): Promise<void> {
+  const cmd = `npx wrangler delete --name ${workerName} --force`;
+  core.info(`Deleting PR worker: ${cmd} (cwd: ${workingDirectory})`);
+  const env = makeEnv(cfEnv);
+  try {
+    await execAsync(cmd, { cwd: workingDirectory, env });
+  } catch (error) {
+    core.warning(`Failed to delete worker ${workerName}: ${error}`);
+  }
 }

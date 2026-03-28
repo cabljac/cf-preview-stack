@@ -169,3 +169,17 @@ export function rewriteVars(
   }
   return result;
 }
+
+/**
+ * Rewrite the worker name and enable workers_dev so the PR worker gets
+ * a *.workers.dev URL and is fully isolated from the production worker.
+ * Preserves comments, formatting, and whitespace.
+ */
+export function rewriteWorkerName(content: string, name: string): string {
+  let result = content;
+  let edits = modify(result, ['name'], name, MODIFICATION_OPTIONS);
+  result = applyEdits(result, edits);
+  edits = modify(result, ['workers_dev'], true, MODIFICATION_OPTIONS);
+  result = applyEdits(result, edits);
+  return result;
+}

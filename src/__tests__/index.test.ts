@@ -51,6 +51,7 @@ vi.mock('../wrangler.js', () => ({
   rewriteKVNamespaces: vi.fn(),
   rewriteWorkflowNames: vi.fn(),
   rewriteVars: vi.fn(),
+  rewriteWorkerName: vi.fn(),
 }));
 
 vi.mock('../d1.js', () => ({
@@ -64,6 +65,7 @@ vi.mock('../kv.js', () => ({
 vi.mock('../teardown.js', () => ({
   teardownDatabases: vi.fn(),
   teardownKVNamespaces: vi.fn(),
+  teardownWorkers: vi.fn(),
 }));
 
 vi.mock('../preview.js', () => ({
@@ -86,10 +88,10 @@ vi.mock('node:fs', () => ({
 }));
 
 import { parseWorkersInput } from '../config.js';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars, rewriteWorkerName } from '../wrangler.js';
 import { createDatabase } from '../d1.js';
 import { createKVNamespace } from '../kv.js';
-import { teardownDatabases, teardownKVNamespaces } from '../teardown.js';
+import { teardownDatabases, teardownKVNamespaces, teardownWorkers } from '../teardown.js';
 import { runMigrations, uploadPreviewVersion } from '../preview.js';
 import { postPreviewComment, postTeardownComment } from '../comment.js';
 import { cleanupOrphanedDatabases } from '../cleanup.js';
@@ -101,10 +103,12 @@ const mockRewriteWranglerConfig = vi.mocked(rewriteWranglerConfig);
 const mockRewriteKVNamespaces = vi.mocked(rewriteKVNamespaces);
 const mockRewriteWorkflowNames = vi.mocked(rewriteWorkflowNames);
 const mockRewriteVars = vi.mocked(rewriteVars);
+const mockRewriteWorkerName = vi.mocked(rewriteWorkerName);
 const mockCreateDatabase = vi.mocked(createDatabase);
 const mockCreateKVNamespace = vi.mocked(createKVNamespace);
 const mockTeardownDatabases = vi.mocked(teardownDatabases);
 const mockTeardownKVNamespaces = vi.mocked(teardownKVNamespaces);
+const mockTeardownWorkers = vi.mocked(teardownWorkers);
 const mockRunMigrations = vi.mocked(runMigrations);
 const mockUploadPreviewVersion = vi.mocked(uploadPreviewVersion);
 const mockPostPreviewComment = vi.mocked(postPreviewComment);
@@ -153,8 +157,10 @@ function setupStandardMocks() {
   });
   mockTeardownDatabases.mockResolvedValue(['preview-pr-42-mydb']);
   mockTeardownKVNamespaces.mockResolvedValue([]);
+  mockTeardownWorkers.mockResolvedValue(undefined);
   mockCreateDatabase.mockResolvedValue('new-uuid-123');
   mockRewriteWranglerConfig.mockReturnValue('{"name":"api","d1_databases":[{"binding":"DB","database_name":"preview-pr-42-mydb","database_id":"new-uuid-123"}]}');
+  mockRewriteWorkerName.mockReturnValue('{"name":"api-pr-42","workers_dev":true,"d1_databases":[]}');
   mockRunMigrations.mockResolvedValue(1);
   mockUploadPreviewVersion.mockResolvedValue({
     workerName: 'api',
@@ -200,8 +206,9 @@ describe('index — orchestration', () => {
       'preview-pr-42-mydb',
     );
 
-    // 3. Rewrite config and write to disk
+    // 3. Rewrite config and write to disk — worker name is always rewritten to isolate from production
     expect(mockRewriteWranglerConfig).toHaveBeenCalled();
+    expect(mockRewriteWorkerName).toHaveBeenCalledWith(expect.any(String), 'api-pr-42');
     expect(mockWriteFileSync).toHaveBeenCalled();
 
     // 4. Migrate
@@ -261,11 +268,15 @@ describe('index — orchestration', () => {
     expect(mockPostPreviewComment).toHaveBeenCalled();
   });
 
-  test('on closed event: calls teardown for both D1 and KV → teardown comment', async () => {
+  test('on closed event: calls teardown for D1, KV, and workers → teardown comment', async () => {
     setupInputs();
     setEventAction('closed');
+    mockParseWorkersInput.mockReturnValue([
+      { path: './api/wrangler.jsonc', workingDirectory: './api' },
+    ]);
     mockTeardownDatabases.mockResolvedValue(['preview-pr-42-mydb']);
     mockTeardownKVNamespaces.mockResolvedValue(['preview-pr-42-MY_KV']);
+    mockTeardownWorkers.mockResolvedValue(undefined);
     mockPostTeardownComment.mockResolvedValue(undefined);
 
     const { run } = await import('../index.js');
@@ -280,6 +291,11 @@ describe('index — orchestration', () => {
       expect.anything(),
       'test-account-id',
       42,
+    );
+    expect(mockTeardownWorkers).toHaveBeenCalledWith(
+      expect.any(Array),
+      42,
+      expect.objectContaining({ apiToken: 'test-cf-token', accountId: 'test-account-id' }),
     );
     expect(mockPostTeardownComment).toHaveBeenCalledWith(
       'test-gh-token',
@@ -524,7 +540,10 @@ describe('index — orchestration', () => {
     const { run } = await import('../index.js');
     await run();
 
-    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    // rewriteWorkerName always runs so writeFileSync is always called
+    expect(mockWriteFileSync).toHaveBeenCalled();
+    expect(mockRewriteWorkerName).toHaveBeenCalledWith(expect.any(String), 'api-pr-42');
+    // No D1/KV/workflow rewrites needed
     expect(mockRewriteWranglerConfig).not.toHaveBeenCalled();
     expect(mockRewriteKVNamespaces).not.toHaveBeenCalled();
     expect(mockRewriteWorkflowNames).not.toHaveBeenCalled();

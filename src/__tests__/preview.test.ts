@@ -103,16 +103,16 @@ describe('runMigrations', () => {
 });
 
 describe('uploadPreviewVersion', () => {
-  test('runs wrangler versions upload --preview-alias pr-{N} with correct cwd', async () => {
-    mockExec.mockImplementation((cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Version uploaded\nVersion Preview Alias URL: https://pr-42-api.example.workers.dev', '');
+  test('runs wrangler deploy with correct cwd', async () => {
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
+      cb(null, 'Deployed api-pr-42.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
 
     const cmd = mockExec.mock.calls[0][0] as string;
-    expect(cmd).toContain('wrangler versions upload');
-    expect(cmd).toContain('--preview-alias pr-42');
+    expect(cmd).toContain('wrangler deploy');
+    expect(cmd).not.toContain('versions upload');
 
     const opts = mockExec.mock.calls[0][1] as Record<string, string>;
     expect(opts.cwd).toBe('/work/api');
@@ -120,7 +120,7 @@ describe('uploadPreviewVersion', () => {
 
   test('passes -c flag with configPath when provided', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Version Preview Alias URL: https://pr-42-api.example.workers.dev', '');
+      cb(null, 'Deployed api-pr-42.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS, '/work/api/dist/out/wrangler.json');
@@ -129,47 +129,13 @@ describe('uploadPreviewVersion', () => {
     expect(cmd).toContain('-c /work/api/dist/out/wrangler.json');
   });
 
-  test('prefers Version Preview Alias URL over Version Preview URL', async () => {
-    const stdout = [
-      'Worker Version ID: abc-123',
-      'Version Preview URL: https://abc123-api.example.workers.dev',
-      'Version Preview Alias URL: https://pr-42-api.example.workers.dev',
-    ].join('\n');
-    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, stdout, '');
-    });
-
-    const result = await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
-
-    expect(result.previewUrl).toBe('pr-42-api.example.workers.dev');
-  });
-
-  test('falls back to Version Preview URL when no alias URL', async () => {
-    const stdout = [
-      'Worker Version ID: abc-123',
-      'Version Preview URL: https://abc123-api.example.workers.dev',
-    ].join('\n');
-    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, stdout, '');
-    });
-
-    const result = await uploadPreviewVersion('api', '/work/api', 42, ENV_VARS);
-
-    expect(result.previewUrl).toBe('abc123-api.example.workers.dev');
-  });
-
-  test('parses alias URL from realistic wrangler output with bindings', async () => {
+  test('parses workers.dev URL from deploy output', async () => {
     const stdout = [
       '⛅️ wrangler 4.70.0',
       '─────────────────────────────────────────────',
       'Total Upload: 7426.37 KiB / gzip: 1215.35 KiB',
-      'Your Worker has access to the following bindings:',
-      'env.DB (preview-pr-42-mydb)                                              D1 Database',
-      '',
-      'Uploaded memcard (6.35 sec)',
-      'Worker Version ID: 6d2ca7a8-1d95-4b48-bc84-1250a253af48',
-      'Version Preview URL: https://6d2ca7a8-memcard.jacobcable94.workers.dev',
-      'Version Preview Alias URL: https://pr-42-memcard.jacobcable94.workers.dev',
+      'Uploaded memcard-pr-42 (6.35 sec)',
+      'Deployed https://memcard-pr-42.jacobcable94.workers.dev',
     ].join('\n');
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
       cb(null, stdout, '');
@@ -178,12 +144,12 @@ describe('uploadPreviewVersion', () => {
     const result = await uploadPreviewVersion('memcard', '/work/web', 42, ENV_VARS);
 
     expect(result.workerName).toBe('memcard');
-    expect(result.previewUrl).toBe('pr-42-memcard.jacobcable94.workers.dev');
+    expect(result.previewUrl).toBe('memcard-pr-42.jacobcable94.workers.dev');
   });
 
   test('passes CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as env vars', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Version Preview Alias URL: https://pr-1-web.example.workers.dev', '');
+      cb(null, 'Deployed https://web-pr-1.example.workers.dev', '');
     });
 
     await uploadPreviewVersion('web', '/work/web', 1, ENV_VARS);
@@ -193,7 +159,7 @@ describe('uploadPreviewVersion', () => {
     expect(opts.env.CLOUDFLARE_ACCOUNT_ID).toBe('test-account');
   });
 
-  test('throws on non-zero exit code with stderr in error message', async () => {
+  test('throws on non-zero exit code', async () => {
     const execError = new Error('Command failed') as Error & { stderr: string };
     execError.stderr = 'Error: Worker not found';
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
@@ -203,16 +169,16 @@ describe('uploadPreviewVersion', () => {
     await expect(uploadPreviewVersion('api', '/work/api', 42, ENV_VARS)).rejects.toThrow();
   });
 
-  test('returns fallback URL when wrangler prints no URL', async () => {
+  test('returns fallback URL when wrangler prints no workers.dev URL', async () => {
     mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
-      cb(null, 'Uploaded myworker (1.5 sec)\nWorker Version ID: abc-123', '');
+      cb(null, 'Uploaded myworker-pr-5 (1.5 sec)', '');
     });
 
     const result = await uploadPreviewVersion('myworker', '/work', 5, ENV_VARS);
 
     expect(result).toEqual({
       workerName: 'myworker',
-      previewUrl: 'pr-5-myworker.workers.dev',
+      previewUrl: 'myworker-pr-5.workers.dev',
     });
   });
 });
