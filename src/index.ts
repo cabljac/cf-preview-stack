@@ -1,4 +1,6 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import Cloudflare from 'cloudflare';
@@ -124,8 +126,9 @@ export async function run(): Promise<void> {
 
     // Step 3: Rewrite configs, run migrations (deduplicated), and upload each worker
     const migratedDbs = new Set<string>();
+    const tempDir = mkdtempSync(join(tmpdir(), 'cf-preview-'));
 
-    for (const { worker, config, originalContent, configPath } of workerConfigs) {
+    for (const [workerIndex, { worker, config, originalContent, configPath }] of workerConfigs.entries()) {
       // Build D1 replacements map for this worker's bindings
       const dbReplacements = new Map<string, DatabaseReplacement>();
       for (const binding of config.d1_databases) {
@@ -171,9 +174,10 @@ export async function run(): Promise<void> {
       // worker is never touched by the preview action.
       const prWorkerName = `${config.name}-pr-${prNumber}`;
       rewritten = rewriteWorkerName(rewritten, prWorkerName);
-      if (rewritten !== originalContent) {
-        writeFileSync(configPath, rewritten, 'utf-8');
-      }
+
+      // Write the rewritten config to a temp file so the original is never mutated.
+      const tempConfigPath = join(tempDir, `${workerIndex}-${basename(configPath)}`);
+      writeFileSync(tempConfigPath, rewritten, 'utf-8');
 
       // Build updated bindings, filtering out already-migrated databases
       const updatedBindings = config.d1_databases
@@ -187,7 +191,7 @@ export async function run(): Promise<void> {
         });
 
       // Run migrations only for databases not yet migrated
-      const migrationsApplied = await runMigrations(updatedBindings, worker.workingDirectory, cfEnv, worker.deployConfig);
+      const migrationsApplied = await runMigrations(updatedBindings, worker.workingDirectory, cfEnv, tempConfigPath);
 
       // Mark these databases as migrated
       for (const binding of config.d1_databases) {
@@ -200,7 +204,7 @@ export async function run(): Promise<void> {
         worker.workingDirectory,
         prNumber,
         cfEnv,
-        worker.deployConfig,
+        tempConfigPath,
       );
       allPreviews.push(preview);
 
@@ -230,6 +234,9 @@ export async function run(): Promise<void> {
         }
       }
     }
+
+    // Clean up temp config files
+    rmSync(tempDir, { recursive: true, force: true });
 
     // Step 4: Comment on PR
     if (shouldComment) {

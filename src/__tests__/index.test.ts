@@ -85,6 +85,8 @@ vi.mock('../cleanup.js', () => ({
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
+  mkdtempSync: vi.fn().mockReturnValue('/tmp/cf-preview-test'),
+  rmSync: vi.fn(),
 }));
 
 import { parseWorkersInput } from '../config.js';
@@ -95,7 +97,7 @@ import { teardownDatabases, teardownKVNamespaces, teardownWorkers } from '../tea
 import { runMigrations, uploadPreviewVersion } from '../preview.js';
 import { postPreviewComment, postTeardownComment } from '../comment.js';
 import { cleanupOrphanedDatabases } from '../cleanup.js';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 
 const mockParseWorkersInput = vi.mocked(parseWorkersInput);
 const mockParseWranglerConfig = vi.mocked(parseWranglerConfig);
@@ -116,6 +118,8 @@ const mockPostTeardownComment = vi.mocked(postTeardownComment);
 const mockCleanupOrphanedDatabases = vi.mocked(cleanupOrphanedDatabases);
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockWriteFileSync = vi.mocked(writeFileSync);
+const mockMkdtempSync = vi.mocked(mkdtempSync);
+const mockRmSync = vi.mocked(rmSync);
 
 function setupInputs(overrides: Record<string, string | boolean> = {}) {
   const defaults: Record<string, string | boolean> = {
@@ -214,13 +218,13 @@ describe('index — orchestration', () => {
     // 4. Migrate
     expect(mockRunMigrations).toHaveBeenCalled();
 
-    // 5. Upload
+    // 5. Upload (receives temp config path)
     expect(mockUploadPreviewVersion).toHaveBeenCalledWith(
       'api',
       './api',
       42,
       expect.objectContaining({ apiToken: 'test-cf-token', accountId: 'test-account-id' }),
-      undefined,
+      '/tmp/cf-preview-test/0-wrangler.jsonc',
     );
 
     // 6. Comment
@@ -442,7 +446,7 @@ describe('index — orchestration', () => {
       [],
       './api',
       expect.anything(),
-      undefined,
+      '/tmp/cf-preview-test/0-wrangler.jsonc',
     );
 
     // Still uploads the preview version
@@ -640,19 +644,19 @@ describe('index — deploy_config (Vite plugin) support', () => {
       'utf-8',
     );
 
-    // Should pass deploy_config to upload and migrations
+    // Should pass temp config path to upload and migrations
     expect(mockUploadPreviewVersion).toHaveBeenCalledWith(
       'analytics',
       'apps/analytics',
       42,
       expect.anything(),
-      'apps/analytics/dist/out/wrangler.json',
+      '/tmp/cf-preview-test/0-wrangler.json',
     );
     expect(mockRunMigrations).toHaveBeenCalledWith(
       expect.anything(),
       'apps/analytics',
       expect.anything(),
-      'apps/analytics/dist/out/wrangler.json',
+      '/tmp/cf-preview-test/0-wrangler.json',
     );
   });
 
@@ -690,9 +694,9 @@ describe('index — deploy_config (Vite plugin) support', () => {
     const { run } = await import('../index.js');
     await run();
 
-    // Should write to deploy_config, not source path
+    // Should write to temp file, not the original config path
     expect(mockWriteFileSync).toHaveBeenCalledWith(
-      'apps/analytics/dist/out/wrangler.json',
+      '/tmp/cf-preview-test/0-wrangler.json',
       expect.any(String),
       'utf-8',
     );
@@ -1120,5 +1124,57 @@ describe('index — secrets (vars) injection', () => {
 
     expect(mockSetSecret).toHaveBeenCalledWith('s3cret');
     expect(mockSetSecret).toHaveBeenCalledWith('k3y');
+  });
+});
+
+describe('index — temp file isolation', () => {
+  test('writes rewritten config to temp file, never mutates original', async () => {
+    setupInputs();
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    // Should write to temp dir, not the original config path
+    const writeCalls = mockWriteFileSync.mock.calls;
+    for (const [path] of writeCalls) {
+      expect(path).toMatch(/^\/tmp\/cf-preview-test\//);
+      expect(path).not.toBe('./api/wrangler.jsonc');
+    }
+  });
+
+  test('cleans up temp directory after deployment', async () => {
+    setupInputs();
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRmSync).toHaveBeenCalledWith('/tmp/cf-preview-test', { recursive: true, force: true });
+  });
+
+  test('passes temp config path to runMigrations and uploadPreviewVersion', async () => {
+    setupInputs();
+    setupStandardMocks();
+    setEventAction('opened');
+
+    const { run } = await import('../index.js');
+    await run();
+
+    expect(mockRunMigrations).toHaveBeenCalledWith(
+      expect.anything(),
+      './api',
+      expect.anything(),
+      '/tmp/cf-preview-test/0-wrangler.jsonc',
+    );
+    expect(mockUploadPreviewVersion).toHaveBeenCalledWith(
+      'api',
+      './api',
+      42,
+      expect.anything(),
+      '/tmp/cf-preview-test/0-wrangler.jsonc',
+    );
   });
 });
