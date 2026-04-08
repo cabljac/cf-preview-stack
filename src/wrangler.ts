@@ -173,13 +173,28 @@ export function rewriteVars(
 /**
  * Rewrite the worker name and enable workers_dev so the PR worker gets
  * a *.workers.dev URL and is fully isolated from the production worker.
+ * Also clears routes, patterns, and custom_domains to prevent conflicts
+ * with the production worker's routing configuration.
  * Preserves comments, formatting, and whitespace.
  */
 export function rewriteWorkerName(content: string, name: string): string {
   let result = content;
+
   let edits = modify(result, ['name'], name, MODIFICATION_OPTIONS);
   result = applyEdits(result, edits);
+
   edits = modify(result, ['workers_dev'], true, MODIFICATION_OPTIONS);
   result = applyEdits(result, edits);
+
+  // Remove production routing config so the PR worker never conflicts with
+  // the production worker. workers_dev: true is sufficient for preview access.
+  const root = parse(result);
+  for (const key of ['routes', 'patterns', 'custom_domains'] as const) {
+    if (root[key] !== undefined) {
+      edits = modify(result, [key], undefined, MODIFICATION_OPTIONS);
+      result = applyEdits(result, edits);
+    }
+  }
+
   return result;
 }

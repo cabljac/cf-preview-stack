@@ -88,17 +88,16 @@ describe('runMigrations', () => {
   });
 
   test('throws on non-zero exit code with stderr in error message', async () => {
-    const execError = new Error('Command failed') as Error & { stderr: string };
-    execError.stderr = 'Migration error: table already exists';
-    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
-      cb(execError);
+    const execError = new Error('Command failed');
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
+      cb(execError, '', 'Migration error: table already exists');
     });
 
     const bindings: D1Binding[] = [
       { binding: 'DB', database_name: 'preview-pr-42-mydb', database_id: 'uuid-1', migrations_dir: './migrations' },
     ];
 
-    await expect(runMigrations(bindings, '/work/api', ENV_VARS)).rejects.toThrow();
+    await expect(runMigrations(bindings, '/work/api', ENV_VARS)).rejects.toThrow('Migration error: table already exists');
   });
 });
 
@@ -162,11 +161,28 @@ describe('uploadPreviewVersion', () => {
   test('throws on non-zero exit code', async () => {
     const execError = new Error('Command failed') as Error & { stderr: string };
     execError.stderr = 'Error: Worker not found';
-    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error) => void) => {
-      cb(execError);
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
+      cb(execError, '', 'Error: Worker not found');
     });
 
-    await expect(uploadPreviewVersion('api', '/work/api', 42, ENV_VARS)).rejects.toThrow();
+    await expect(uploadPreviewVersion('api', '/work/api', 42, ENV_VARS)).rejects.toThrow('Error: Worker not found');
+  });
+
+  test('parses workers.dev URL from stderr when stdout is empty', async () => {
+    const stderr = [
+      '⛅️ wrangler 4.70.0',
+      'Total Upload: 7426.37 KiB / gzip: 1215.35 KiB',
+      'Uploaded memcard-pr-42 (6.35 sec)',
+      'Deployed https://memcard-pr-42.jacobcable94.workers.dev',
+    ].join('\n');
+    mockExec.mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, stdout: string, stderr: string) => void) => {
+      cb(null, '', stderr);
+    });
+
+    const result = await uploadPreviewVersion('memcard', '/work/web', 42, ENV_VARS);
+
+    expect(result.workerName).toBe('memcard');
+    expect(result.previewUrl).toBe('memcard-pr-42.jacobcable94.workers.dev');
   });
 
   test('returns fallback URL when wrangler prints no workers.dev URL', async () => {

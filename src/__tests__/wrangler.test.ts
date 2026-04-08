@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'vitest';
 import { parse as parseJsonc } from 'jsonc-parser';
-import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars } from '../wrangler.js';
+import { parseWranglerConfig, rewriteWranglerConfig, rewriteKVNamespaces, rewriteWorkflowNames, rewriteVars, rewriteWorkerName } from '../wrangler.js';
 
 const BASIC_CONFIG = `{
   // Worker name
@@ -496,5 +496,81 @@ describe('rewriteVars', () => {
     expect(parsed.d1_databases[0].database_id).toBe('new-db-uuid');
     expect(parsed.kv_namespaces[0].id).toBe('new-ns-id');
     expect(parsed.workflows[0].name).toBe('preview-pr-42-my-workflow');
+  });
+});
+
+describe('rewriteWorkerName', () => {
+  const CONFIG_WITH_ROUTES = `{
+  // Production worker
+  "name": "api",
+  "main": "src/index.ts",
+  "workers_dev": false,
+  "routes": ["myapp.com/*", "www.myapp.com/*"]
+}`;
+
+  const CONFIG_WITH_PATTERNS = `{
+  "name": "api",
+  "main": "src/index.ts",
+  "patterns": ["myapp.com/*"]
+}`;
+
+  const CONFIG_WITH_CUSTOM_DOMAINS = `{
+  "name": "api",
+  "main": "src/index.ts",
+  "custom_domains": ["myapp.com"]
+}`;
+
+  const PLAIN_CONFIG = `{
+  "name": "api",
+  "main": "src/index.ts"
+}`;
+
+  test('renames the worker', () => {
+    const result = rewriteWorkerName(PLAIN_CONFIG, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.name).toBe('api-pr-42');
+  });
+
+  test('sets workers_dev to true', () => {
+    const result = rewriteWorkerName(PLAIN_CONFIG, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.workers_dev).toBe(true);
+  });
+
+  test('overrides workers_dev: false to true', () => {
+    const result = rewriteWorkerName(CONFIG_WITH_ROUTES, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.workers_dev).toBe(true);
+  });
+
+  test('removes routes to prevent conflict with production worker', () => {
+    const result = rewriteWorkerName(CONFIG_WITH_ROUTES, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.routes).toBeUndefined();
+  });
+
+  test('removes patterns to prevent conflict with production worker', () => {
+    const result = rewriteWorkerName(CONFIG_WITH_PATTERNS, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.patterns).toBeUndefined();
+  });
+
+  test('removes custom_domains to prevent conflict with production worker', () => {
+    const result = rewriteWorkerName(CONFIG_WITH_CUSTOM_DOMAINS, 'api-pr-42');
+    const parsed = parseJsonc(result);
+    expect(parsed.custom_domains).toBeUndefined();
+  });
+
+  test('leaves config without routes unchanged (no routes key added)', () => {
+    const result = rewriteWorkerName(PLAIN_CONFIG, 'api-pr-42');
+    expect(result).not.toContain('routes');
+    expect(result).not.toContain('patterns');
+    expect(result).not.toContain('custom_domains');
+  });
+
+  test('preserves comments and other fields', () => {
+    const result = rewriteWorkerName(CONFIG_WITH_ROUTES, 'api-pr-42');
+    expect(result).toContain('// Production worker');
+    expect(result).toContain('"main": "src/index.ts"');
   });
 });

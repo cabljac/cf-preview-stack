@@ -14,7 +14,8 @@ function execAsync(
   return new Promise((resolve, reject) => {
     exec(command, options, (error, stdout, stderr) => {
       if (error) {
-        reject(error);
+        const msg = stderr?.trim() ? `${error.message}\n${stderr.trim()}` : error.message;
+        reject(new Error(msg));
         return;
       }
       resolve({ stdout: stdout as string, stderr: stderr as string });
@@ -84,10 +85,10 @@ export async function uploadPreviewVersion(
   core.info(`Deploying PR worker: ${cmd} (cwd: ${workingDirectory})`);
 
   const env = makeEnv(cfEnv);
-  const { stdout } = await execAsync(cmd, { cwd: workingDirectory, env });
+  const { stdout, stderr } = await execAsync(cmd, { cwd: workingDirectory, env });
 
-  core.info(`wrangler output: ${stdout}`);
-  const parsedUrl = parseDeployUrl(stdout);
+  core.info(`wrangler output: ${stdout || stderr}`);
+  const parsedUrl = parseDeployUrl(stdout) ?? parseDeployUrl(stderr);
   const prWorkerName = `${workerName}-pr-${prNumber}`;
   const previewUrl = parsedUrl ?? `${prWorkerName}.workers.dev`;
   core.info(`Preview URL for ${workerName}: ${previewUrl}${parsedUrl ? '' : ' (fallback)'}`);
